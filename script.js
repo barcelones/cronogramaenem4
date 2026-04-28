@@ -11,6 +11,9 @@ const db = firebase.firestore();
 let currentTasks = [], selectedDate = null, activeTask = null, editingTaskId = null;
 let uploadedImageBase64 = "", tempRedacaoPhoto = "", activeTaskFilter = 'all';
 
+// O sistema busca a chave do Gemini no seu navegador, mantendo-a separada do Firebase
+let GEMINI_API_KEY = localStorage.getItem('gemini_api_key') || "";
+
 function showAlert(msg) {
     document.getElementById('alert-message').innerText = msg;
     document.getElementById('modal-alert').style.display = 'flex';
@@ -69,13 +72,10 @@ async function resetPlatform() {
     } catch(e) { showAlert("Erro ao zerar: " + e.message); }
 }
 
-// NOVA LÓGICA DE COUNTDOWN DINÂMICO
 function updateCountdown() {
     const anoTexto = document.getElementById('edit-ano').innerText;
     const match = anoTexto.match(/\d{4}/);
     const targetYear = match ? parseInt(match[0]) : 2026;
-    
-    // Definimos a data do ENEM como aprox 1 de Novembro do ano selecionado
     const targetDate = new Date(`${targetYear}-11-01T00:00:00`).getTime();
     const now = new Date().getTime();
     const diff = targetDate - now;
@@ -85,7 +85,6 @@ function updateCountdown() {
 }
 
 async function loadEdits() {
-    // Tenta carregar do Firestore primeiro
     if (auth.currentUser) {
         const doc = await db.collection("users").doc(auth.currentUser.uid).get();
         if (doc.exists) {
@@ -93,7 +92,6 @@ async function loadEdits() {
             if (data.meta) document.getElementById('edit-meta').innerText = data.meta;
             if (data.ano) document.getElementById('edit-ano').innerText = data.ano;
         } else {
-            // Fallback para localStorage se não houver no Firestore
             const meta = localStorage.getItem('enem_meta'), ano = localStorage.getItem('enem_ano');
             if(meta) document.getElementById('edit-meta').innerText = meta;
             if(ano) document.getElementById('edit-ano').innerText = ano;
@@ -107,7 +105,6 @@ async function saveEdits() {
     const ano = document.getElementById('edit-ano').innerText;
     localStorage.setItem('enem_meta', meta); 
     localStorage.setItem('enem_ano', ano);
-    
     if (auth.currentUser) {
         await db.collection("users").doc(auth.currentUser.uid).set({ meta, ano }, { merge: true });
     }
@@ -161,7 +158,7 @@ auth.onAuthStateChanged(user => {
         document.getElementById('user-pic').src = localStorage.getItem('custom_profile_pic') || user.photoURL || 'https://via.placeholder.com/70';
         loadEdits(); 
         loadTasks();
-        restoreTimers(); // Restaura os cronometros se fechar a aba
+        restoreTimers();
     } else { document.getElementById('login-screen').style.display = 'flex'; document.getElementById('app').style.display = 'none'; }
 });
 
@@ -229,7 +226,6 @@ function renderDailyTasks(dateStr) {
         let titleText = `${t.materia} (${t.type.toUpperCase()})`;
         if (t.type === 'simulado' && t.content) titleText += ` - ${t.content}`;
         else if (t.content) titleText += ` - ${t.content}`;
-        
         html += `<div class="daily-task-item" style="border-left-color: ${cor}">
                     <div class="time">${t.startTime} às ${t.endTime}</div>
                     <div class="title">${titleText}</div>
@@ -239,18 +235,14 @@ function renderDailyTasks(dateStr) {
 }
 
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-function timeToMins(timeStr) { if(!timeStr) return 0; let parts = timeStr.split(':'); return parseInt(parts[0]) * 60 + parseInt(parts[1]); }
 
 async function handleSaveTask() {
     const type = document.getElementById('task-type').value, materia = document.getElementById('task-materia').value, contentElem = document.getElementById('task-content'), qntElem = document.getElementById('task-qnt'), startTime = document.getElementById('task-start-time').value, endTime = document.getElementById('task-end-time').value, metaRedacaoElem = document.getElementById('task-meta-redacao');
     let plannedTime = 0;
-    
     if(startTime && endTime) {
         plannedTime = (new Date(`1970-01-01T${endTime}:00`) - new Date(`1970-01-01T${startTime}:00`)) / 60000;
         if (plannedTime <= 0) return showAlert("O horário final precisa ser maior que o de início.");
-        // A trava de choque de horários foi removida aqui conforme solicitado.
     }
-    
     let contentVal = contentElem ? contentElem.value : '';
     if((type === 'aula' || type === 'questoes') && contentVal) saveCustomTopic(materia, contentVal);
 
@@ -266,23 +258,19 @@ async function handleSaveTask() {
         plannedTime, 
         reviewed: false 
     };
-
     if (type === 'redacao' && metaRedacaoElem && !editingTaskId) { taskData.metaRedacao = parseInt(metaRedacaoElem.value) || 0; } 
-
     if(editingTaskId) {
         const oldTask = currentTasks.find(t => t.id === editingTaskId);
         if(oldTask && oldTask.reviewed !== undefined) taskData.reviewed = oldTask.reviewed;
         if(oldTask && oldTask.type === 'redacao' && oldTask.metaRedacao) taskData.metaRedacao = oldTask.metaRedacao; 
         taskData.date = selectedDate; 
-        // Não sobrescreve createdAt em edições
         await db.collection("tasks").doc(editingTaskId).update(taskData);
         closeModal('modal-task');
         loadTasks();
         document.getElementById('modal-success').style.display = 'flex'; 
         return;
     }
-
-    taskData.createdAt = firebase.firestore.FieldValue.serverTimestamp(); // Só adiciona em novas tarefas
+    taskData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     const repeat = document.getElementById('task-repeat').checked, baseDate = new Date(selectedDate + 'T12:00:00');
     for(let i = 0; i < (repeat ? 3 : 1); i++) {
         const d = new Date(baseDate); d.setDate(d.getDate() + (i * 7));
@@ -301,13 +289,10 @@ function openEditModal(id) {
     document.getElementById('task-materia').value = task.materia;
     if(document.getElementById('task-content')) document.getElementById('task-content').value = task.content || '';
     if(document.getElementById('task-qnt')) document.getElementById('task-qnt').value = task.qnt || '';
-    
     if(document.getElementById('task-meta-redacao')) {
         document.getElementById('task-meta-redacao').value = task.metaRedacao || '';
         document.getElementById('task-meta-redacao').disabled = true;
-        document.getElementById('task-meta-redacao').title = "A meta não pode ser alterada depois de agendada!";
     }
-    
     document.getElementById('task-start-time').value = task.startTime || '00:00'; document.getElementById('task-end-time').value = task.endTime || '00:00';
     document.getElementById('repeat-container').style.display = 'none'; document.getElementById('delete-task-container').style.display = 'block'; 
     closeModal('modal-daily'); document.getElementById('modal-task').style.display = 'flex';
@@ -330,21 +315,18 @@ function renderCard(t, statusClass, statusText) {
 
     const card = document.createElement('div'); card.className = `task-card ${statusClass}`;
     let photoBtn = (t.type === 'redacao' && t.photo) ? `<button class="btn-edit" style="color:var(--primary); border-color:var(--primary);" onclick="openPhotoModal('${t.photo}')">📷 Ver Foto</button>` : '';
-
     let diffHtml = t.difficulty ? `<span class="difficulty-badge diff-${t.difficulty}">${t.difficulty}</span>` : '';
     let scoreHtml = '';
     if (t.score !== undefined) { 
         if (t.type === 'redacao' && t.metaRedacao) {
             let scoreColor = 'var(--purple)', scoreText = `Nota: ${t.score} (Meta: ${t.metaRedacao})`;
-            if (t.score < t.metaRedacao) { scoreColor = 'var(--danger)'; scoreText += ' - Não concluída'; } 
-            else if (t.score === t.metaRedacao) { scoreColor = 'var(--accent)'; scoreText += ' - Na mosca!'; } 
-            else { scoreColor = 'var(--success)'; scoreText += ' - Meta superada!'; }
+            if (t.score < t.metaRedacao) scoreColor = 'var(--danger)';
+            else if (t.score > t.metaRedacao) scoreColor = 'var(--success)';
             scoreHtml = `<div style="color:${scoreColor}; font-weight:bold; margin-top:5px;">🎯 ${scoreText}</div>`;
         } else { scoreHtml = `<div style="color:var(--purple); font-weight:bold; margin-top:5px;">Nota: ${t.score}</div>`; }
     }
-    
     let editBtnHtml = `<button class="btn-edit" onclick="openEditModal('${t.id}')">✏️ Editar</button>`;
-    if (t.type === 'redacao' && statusClass === 'done') { editBtnHtml = ''; }
+    if (t.type === 'redacao' && statusClass === 'done') editBtnHtml = '';
 
     card.innerHTML = `
         <div style="flex:1;">
@@ -379,10 +361,6 @@ function renderTaskList() {
         }
     });
     redacaoArr.sort((a,b) => { if(a.task._statusWeight !== b.task._statusWeight) return a.task._statusWeight - b.task._statusWeight; return b.task.date.localeCompare(a.task.date); }).forEach(item => redacaoList.appendChild(item.card));
-    if(listPending.innerHTML === '') listPending.innerHTML = '<p style="color:var(--dim); font-size:0.9rem;">Nenhuma tarefa pendente por aqui!</p>';
-    if(listIncomplete.innerHTML === '') listIncomplete.innerHTML = '<p style="color:var(--dim); font-size:0.9rem;">Você não tem tarefas atrasadas!</p>';
-    if(listDone.innerHTML === '') listDone.innerHTML = '<p style="color:var(--dim); font-size:0.9rem;">Nenhuma tarefa concluída ainda.</p>';
-    if(redacaoList.innerHTML === '') redacaoList.innerHTML = '<p style="color:var(--dim); font-size:0.9rem;">Nenhuma redação registrada.</p>';
 }
 
 function openPhotoModal(imgSrc) { document.getElementById('view-photo-img').src = imgSrc; document.getElementById('modal-photo-view').style.display = 'flex'; }
@@ -391,27 +369,15 @@ function openImprovementModal() { document.getElementById('modal-improvement').s
 function openDifficultyDetails(diff) {
     const list = document.getElementById('diff-modal-list');
     const title = document.getElementById('diff-modal-title');
-    const diffNames = { 'facil': 'Nível Fácil', 'medio': 'Nível Médio', 'dificil': 'Nível Difícil' };
-    const diffColors = { 'facil': 'var(--success)', 'medio': 'var(--accent)', 'dificil': 'var(--danger)' };
-    
-    title.innerText = `Histórico: ${diffNames[diff]}`; title.style.color = diffColors[diff];
-    const filtered = currentTasks.filter(t => t.status === 'done' && t.difficulty === diff && (t.type === 'questoes' || t.type === 'simulado'));
-    
-    if (filtered.length === 0) { list.innerHTML = '<p style="color:var(--dim); text-align:center;">Nenhuma questão avaliada nesse nível ainda.</p>'; } 
-    else {
-        let html = '';
-        filtered.sort((a,b) => b.date.localeCompare(a.date)).forEach(t => {
-            let desc = t.type === 'simulado' ? `Simulado: ${t.content || 'Geral'}` : (t.content || 'Treinamento Geral');
-            html += `<div style="background:var(--card); padding:15px; border-radius:8px; margin-bottom:10px; border-left:4px solid ${getColor(t.materia)};">
-                <div style="font-weight:bold; color:var(--text);">${t.date.split('-').reverse().join('/')} - ${t.materia}</div>
-                <div style="font-size:0.85rem; color:var(--dim); margin-top:3px;">${desc}</div>
-                <div style="margin-top:8px; font-size:0.9rem; font-weight:bold;">
-                    <span style="color:var(--success);">✅ Acertos: ${t.hits||0}</span> <span style="margin: 0 5px; color:var(--border);">|</span> 
-                    <span style="color:var(--danger);">❌ Erros: ${t.errors||0}</span>
-                </div>
+    title.innerText = `Histórico: Nível ${diff.charAt(0).toUpperCase() + diff.slice(1)}`;
+    const filtered = currentTasks.filter(t => t.status === 'done' && t.difficulty === diff);
+    list.innerHTML = filtered.length === 0 ? '<p style="color:var(--dim); text-align:center;">Nenhuma questão registrada.</p>' : '';
+    filtered.forEach(t => {
+        list.innerHTML += `<div style="background:var(--card); padding:15px; border-radius:8px; margin-bottom:10px; border-left:4px solid ${getColor(t.materia)};">
+                <div style="font-weight:bold;">${t.date.split('-').reverse().join('/')} - ${t.materia}</div>
+                <div style="color:var(--success);">Acertos: ${t.hits||0} | Erros: ${t.errors||0}</div>
             </div>`;
-        }); list.innerHTML = html;
-    }
+    });
     document.getElementById('modal-diff-details').style.display = 'flex';
 }
 
@@ -424,51 +390,37 @@ function renderReviewSection() {
             if(!matStats[matLida]) matStats[matLida] = { hits: 0, total: 0 };
             let hits = t.hits || 0, errors = t.errors || 0; matStats[matLida].hits += hits; matStats[matLida].total += (hits + errors);
             if(errors > 0) {
-                if(t.reviewed) { reviewedCount++; } else {
+                if(t.reviewed) reviewedCount++; else {
                     pendingCount++;
-                    let desc = t.type === 'simulado' ? `Simulado: ${t.content || 'Geral'}` : (t.content || 'Treino Geral');
-                    reviewHtml += `<div style="background:var(--bg); padding:12px; border-radius:8px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; border-left:4px solid var(--danger); flex-wrap: wrap; gap: 10px;">
-                                    <div><strong style="color:#fff;">${matLida}</strong> <span style="color:var(--dim); font-size:0.9rem;">- ${desc}</span><div style="font-size:0.85rem; color:var(--danger); font-weight:bold; margin-top:3px;">❌ ${errors} erro(s) em ${t.date.split('-').reverse().join('/')}</div></div>
-                                    <button onclick="markAsReviewed('${t.id}')" style="background:var(--success); color:#000; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; font-weight:bold; font-size:0.85rem;">Revisado</button>
+                    reviewHtml += `<div style="background:var(--bg); padding:12px; border-radius:8px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; border-left:4px solid var(--danger);">
+                                    <div><strong>${matLida}</strong> - ${t.errors} erros<div style="font-size:0.8rem; color:var(--dim);">${t.date.split('-').reverse().join('/')}</div></div>
+                                    <button onclick="markAsReviewed('${t.id}')" class="btn-edit">Revisado</button>
                                    </div>`;
                 }
             }
         }
     });
-    if(reviewHtml === '') reviewHtml = '<div style="text-align:center; padding: 20px 0; color:var(--dim);">Nenhuma revisão pendente. 🎉</div>';
-    reviewList.innerHTML = reviewHtml; document.getElementById('imp-reviewed-count').innerText = reviewedCount; document.getElementById('imp-pending-count').innerText = pendingCount;
-    let improveArr = Object.keys(matStats).map(mat => { return { materia: mat, acc: matStats[mat].total > 0 ? (matStats[mat].hits / matStats[mat].total) : 0, total: matStats[mat].total }; }).filter(item => item.acc < 0.70 && item.total >= 5).sort((a,b) => a.acc - b.acc).slice(0, 4);
-    let impHtml = ''; improveArr.forEach(item => { impHtml += `<span style="background:rgba(245, 158, 11, 0.15); color:var(--accent); padding:10px 15px; border-radius:8px; border:1px solid var(--accent); font-weight:bold; font-size:0.9rem;">${item.materia} (${(item.acc*100).toFixed(0)}%)</span>`; });
-    if(impHtml === '') impHtml = '<div style="color:var(--success); font-weight:bold; width: 100%; text-align: center;">Suas médias estão ótimas! Continue assim! 🔥</div>';
-    improveList.innerHTML = impHtml;
+    reviewList.innerHTML = reviewHtml || '<div style="text-align:center; padding: 20px 0; color:var(--dim);">Tudo limpo! 🎉</div>';
+    document.getElementById('imp-reviewed-count').innerText = reviewedCount;
+    document.getElementById('imp-pending-count').innerText = pendingCount;
 }
 
 async function markAsReviewed(id) { await db.collection("tasks").doc(id).update({reviewed: true}); }
-async function deleteTaskFromModal() { if(!editingTaskId) return; if(!confirm("Deseja apagar essa tarefa definitivamente?")) return; await db.collection("tasks").doc(editingTaskId).delete(); closeModal('modal-task'); }
+async function deleteTaskFromModal() { if(!editingTaskId) return; if(confirm("Apagar tarefa?")) await db.collection("tasks").doc(editingTaskId).delete(); closeModal('modal-task'); }
 
 function openDoneModal(id) {
     activeTask = currentTasks.find(t => t.id === id); tempRedacaoPhoto = ""; 
-    document.getElementById('done-task-info').innerText = `${activeTask.materia === 'Geral' ? 'Questões' : activeTask.materia} (${activeTask.type.toUpperCase()})`;
+    document.getElementById('done-task-info').innerText = `${activeTask.materia} (${activeTask.type.toUpperCase()})`;
     const container = document.getElementById('done-dynamic-fields');
-    const diffContainer = document.getElementById('difficulty-selection');
-    
-    document.getElementById('task-difficulty-val').value = '';
-    document.querySelectorAll('#difficulty-selection button').forEach(b => b.style.background = 'var(--bg)');
-
-    if (activeTask.type === 'questoes' || activeTask.type === 'simulado') { diffContainer.style.display = 'block'; } 
-    else { diffContainer.style.display = 'none'; }
-
+    document.getElementById('difficulty-selection').style.display = (activeTask.type === 'questoes' || activeTask.type === 'simulado') ? 'block' : 'none';
     let html = '';
     if(activeTask.type === 'redacao') {
-        html = `<input type="number" id="done-score" placeholder="Nota da Redação (0 - 1000)" max="1000">
-                <div style="margin-top:15px; background:var(--bg); padding:15px; border-radius:8px; border:1px solid var(--border);">
-                    <label style="font-size:0.85rem; color:var(--dim); display:block; margin-bottom:8px;">📷 Adicionar Foto da Redação (Opcional)</label>
-                    <input type="file" id="done-redacao-file" accept="image/*" onchange="handleRedacaoPhotoUpload(event)" style="margin:0; padding:5px;">
-                </div>`;
+        html = `<input type="number" id="done-score" placeholder="Nota da Redação (0 - 1000)">
+                <input type="file" id="done-redacao-file" accept="image/*" onchange="handleRedacaoPhotoUpload(event)">`;
     } else {
-        html = `<input type="number" id="done-time" value="${activeTask.plannedTime || ''}" placeholder="Tempo real gasto em minutos">`;
+        html = `<input type="number" id="done-time" value="${activeTask.plannedTime || ''}" placeholder="Tempo real (minutos)">`;
         if(activeTask.type === 'questoes' || activeTask.type === 'simulado') {
-            html += `<div style="display:flex; gap:10px;"><input type="number" id="done-hits" placeholder="Acertos" style="border-color:var(--success)"><input type="number" id="done-errors" placeholder="Erros" style="border-color:var(--danger)"></div>`;
+            html += `<div style="display:flex; gap:10px;"><input type="number" id="done-hits" placeholder="Acertos"><input type="number" id="done-errors" placeholder="Erros"></div>`;
         }
     }
     container.innerHTML = html; document.getElementById('modal-done').style.display = 'flex';
@@ -476,201 +428,48 @@ function openDoneModal(id) {
 
 function setDifficulty(val) {
     document.getElementById('task-difficulty-val').value = val;
-    document.getElementById('btn-diff-facil').style.background = 'var(--bg)';
-    document.getElementById('btn-diff-medio').style.background = 'var(--bg)';
-    document.getElementById('btn-diff-dificil').style.background = 'var(--bg)';
+    document.querySelectorAll('#difficulty-selection button').forEach(b => b.style.background = 'var(--bg)');
     document.getElementById('btn-diff-'+val).style.background = 'var(--card)';
 }
 
 async function confirmTaskCompletion() {
-    let updateData = { status: 'done', completedAt: firebase.firestore.FieldValue.serverTimestamp(), reviewed: false };
-    
+    let updateData = { status: 'done', completedAt: firebase.firestore.FieldValue.serverTimestamp() };
     if(activeTask.type === 'redacao') {
         const score = parseInt(document.getElementById('done-score').value);
-        if(isNaN(score)) return showAlert("Insira a nota da sua redação.");
+        if(isNaN(score)) return showAlert("Insira a nota.");
         updateData.score = score; if(tempRedacaoPhoto) updateData.photo = tempRedacaoPhoto;
     } else {
         const time = parseInt(document.getElementById('done-time').value);
-        if(isNaN(time)) return showAlert("Preencha o tempo gasto!");
+        if(isNaN(time)) return showAlert("Insira o tempo.");
         updateData.realTime = time;
         if(activeTask.type === 'questoes' || activeTask.type === 'simulado') {
             const hits = parseInt(document.getElementById('done-hits').value);
             const errs = parseInt(document.getElementById('done-errors').value);
             const diff = document.getElementById('task-difficulty-val').value;
-            
-            if(isNaN(hits) || isNaN(errs)) return showAlert("Preencha a quantidade de acertos e erros.");
-            if(!diff) return showAlert("Não se esqueça de marcar a dificuldade da questão.");
-            
+            if(isNaN(hits) || isNaN(errs) || !diff) return showAlert("Preencha todos os campos.");
             updateData.hits = hits; updateData.errors = errs; updateData.difficulty = diff;
         }
     }
     await db.collection("tasks").doc(activeTask.id).update(updateData); closeModal('modal-done');
 }
 
-// ==========================================
-// GAMIFICAÇÃO: CONQUISTAS E 50 MISSÕES
-// ==========================================
 function renderConquistas() {
-    const today = new Date(); 
-    const todayStr = today.toISOString().split('T')[0];
-    const startOfWeek = new Date(today); startOfWeek.setDate(today.getDate() - today.getDay());
-    const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6);
-    const startWeekStr = startOfWeek.toISOString().split('T')[0];
-    const endWeekStr = endOfWeek.toISOString().split('T')[0];
-    const monthStr = todayStr.substring(0,7);
-
     const doneTasks = currentTasks.filter(t => t.status === 'done');
-    const questoes = doneTasks.filter(t => t.type === 'questoes' || t.type === 'simulado');
-    const redacoes = doneTasks.filter(t => t.type === 'redacao');
-
-    let stats = {
-        totalQ: 0, facilQ: 0, medioQ: 0, dificilQ: 0,
-        qToday: 0, qWeek: 0, qMonth: 0,
-        timeToday: 0, timeWeek: 0, timeMonth: 0,
-        redToday: 0, redWeek: 0, redMonth: 0,
-        matQ: 0, natQ: 0, humQ: 0, linQ: 0
-    };
-
-    questoes.forEach(q => {
-        let qs = (q.hits || 0) + (q.errors || 0);
-        stats.totalQ += qs;
-        if (q.difficulty === 'facil') stats.facilQ += qs;
-        if (q.difficulty === 'medio') stats.medioQ += qs;
-        if (q.difficulty === 'dificil') stats.dificilQ += qs;
-        
-        if (q.date === todayStr) { stats.qToday += qs; stats.timeToday += (q.realTime||0); }
-        if (q.date >= startWeekStr && q.date <= endWeekStr) { stats.qWeek += qs; stats.timeWeek += (q.realTime||0); }
-        if (q.date.startsWith(monthStr)) { stats.qMonth += qs; stats.timeMonth += (q.realTime||0); }
-
-        let matLida = q.materia === "Geral" ? "Questões" : q.materia;
-        if (matLida === 'Matemática') stats.matQ += qs;
-        else if (['Biologia', 'Física', 'Química', '2º Dia (Mat/Natureza)'].includes(matLida)) stats.natQ += qs;
-        else if (['História', 'Geografia', 'Filosofia', 'Sociologia', '1º Dia (Ling/Humanas)'].includes(matLida)) stats.humQ += qs;
-        else if (matLida === 'Linguagens') stats.linQ += qs;
-    });
-
-    redacoes.forEach(r => {
-        if (r.date === todayStr) stats.redToday++;
-        if (r.date >= startWeekStr && r.date <= endWeekStr) stats.redWeek++;
-        if (r.date.startsWith(monthStr)) stats.redMonth++;
-    });
-
-    document.getElementById('stats-total-q').innerText = stats.totalQ;
-    document.getElementById('stats-facil-q').innerText = stats.facilQ;
-    document.getElementById('stats-medio-q').innerText = stats.medioQ;
-    document.getElementById('stats-dificil-q').innerText = stats.dificilQ;
-
-    let metaBatidaCount = redacoes.filter(r => r.score && r.metaRedacao && r.score >= r.metaRedacao).length;
-
+    const totalQ = doneTasks.reduce((acc, t) => acc + ((t.hits || 0) + (t.errors || 0)), 0);
+    document.getElementById('stats-total-q').innerText = totalQ;
     const medals = [
-        { title: "Calouro", desc: "Resolver 100 questões", icon: "🌱", val: stats.totalQ, target: 100 },
-        { title: "Veterano", desc: "Resolver 500 questões", icon: "🔥", val: stats.totalQ, target: 500 },
-        { title: "O Grande Mestre", desc: "Resolver 1.000 questões", icon: "👑", val: stats.totalQ, target: 1000 },
-        { title: "Escritor", desc: "Fazer 5 redações", icon: "🖋️", val: redacoes.length, target: 5 },
-        { title: "Elite 900+", desc: "Bater 10 metas de Redação", icon: "💎", val: metaBatidaCount, target: 10 }
+        { title: "Calouro", desc: "100 questões", icon: "🌱", val: totalQ, target: 100 },
+        { title: "Veterano", desc: "500 questões", icon: "🔥", val: totalQ, target: 500 },
+        { title: "Escritor", desc: "5 redações", icon: "🖋️", val: doneTasks.filter(t => t.type === 'redacao').length, target: 5 }
     ];
-    document.getElementById('medal-container').innerHTML = medals.map(m => {
-        const isUnlocked = m.val >= m.target;
-        return `<div class="medal-card ${isUnlocked ? 'unlocked' : 'locked'}">
-                    <span class="medal-icon">${m.icon}</span><div class="medal-title">${m.title}</div>
-                    <div class="medal-desc">${m.desc}</div><div style="font-size:0.75rem; color:var(--primary); margin-top:10px; font-weight:bold;">${Math.min(m.val, m.target)} / ${m.target}</div>
-                </div>`;
-    }).join('');
-
-    const missionDefs = [
-        { t:'diaria', title:'Aquecimento', desc:'Faça 5 questões hoje', val: stats.qToday, req: 5 },
-        { t:'diaria', title:'Pegando o Ritmo', desc:'Faça 15 questões hoje', val: stats.qToday, req: 15 },
-        { t:'diaria', title:'Foco Enem', desc:'Faça 30 questões hoje', val: stats.qToday, req: 30 },
-        { t:'diaria', title:'Simulador Parcial', desc:'Faça 45 questões hoje', val: stats.qToday, req: 45 },
-        { t:'diaria', title:'Guerreiro do Dia', desc:'Faça 60 questões hoje', val: stats.qToday, req: 60 },
-        { t:'diaria', title:'Maratonista', desc:'Faça 90 questões hoje', val: stats.qToday, req: 90 },
-
-        { t:'diaria', title:'Meia horinha', desc:'Estude 30 min hoje', val: stats.timeToday, req: 30 },
-        { t:'diaria', title:'Uma horinha', desc:'Estude 60 min hoje', val: stats.timeToday, req: 60 },
-        { t:'diaria', title:'Sessão Dupla', desc:'Estude 120 min hoje', val: stats.timeToday, req: 120 },
-        { t:'diaria', title:'Hardcore', desc:'Estude 240 min hoje', val: stats.timeToday, req: 240 },
-        { t:'diaria', title:'Nível Asiático', desc:'Estude 300 min hoje', val: stats.timeToday, req: 300 },
-
-        { t:'semanal', title:'Semana Start', desc:'Faça 50 questões na semana', val: stats.qWeek, req: 50 },
-        { t:'semanal', title:'Constância', desc:'Faça 100 questões na semana', val: stats.qWeek, req: 100 },
-        { t:'semanal', title:'Acelerando', desc:'Faça 150 questões na semana', val: stats.qWeek, req: 150 },
-        { t:'semanal', title:'Ritmo Forte', desc:'Faça 200 questões na semana', val: stats.qWeek, req: 200 },
-        { t:'semanal', title:'Modo Máquina', desc:'Faça 300 questões na semana', val: stats.qWeek, req: 300 },
-        { t:'semanal', title:'Imparável', desc:'Faça 400 questões na semana', val: stats.qWeek, req: 400 },
-
-        { t:'semanal', title:'Dedicação', desc:'Estude 300 min na semana', val: stats.timeWeek, req: 300 },
-        { t:'semanal', title:'Foco Total', desc:'Estude 600 min na semana', val: stats.timeWeek, req: 600 },
-        { t:'semanal', title:'Ultra Foco', desc:'Estude 900 min na semana', val: stats.timeWeek, req: 900 },
-        { t:'semanal', title:'Viciado em Estudar', desc:'Estude 1200 min na semana', val: stats.timeWeek, req: 1200 },
-
-        { t:'mensal', title:'Mês Consistente', desc:'Faça 200 questões no mês', val: stats.qMonth, req: 200 },
-        { t:'mensal', title:'Evolução Clara', desc:'Faça 400 questões no mês', val: stats.qMonth, req: 400 },
-        { t:'mensal', title:'Mês de Ouro', desc:'Faça 600 questões no mês', val: stats.qMonth, req: 600 },
-        { t:'mensal', title:'Rumo à Aprovação', desc:'Faça 800 questões no mês', val: stats.qMonth, req: 800 },
-        { t:'mensal', title:'Mito do Enem', desc:'Faça 1000 questões no mês', val: stats.qMonth, req: 1000 },
-        { t:'mensal', title:'Lenda Viva', desc:'Faça 1500 questões no mês', val: stats.qMonth, req: 1500 },
-
-        { t:'mensal', title:'Primeira Canetada', desc:'Faça 1 redação no mês', val: stats.redMonth, req: 1 },
-        { t:'mensal', title:'Escritor Júnior', desc:'Faça 2 redações no mês', val: stats.redMonth, req: 2 },
-        { t:'mensal', title:'O Padrão', desc:'Faça 4 redações no mês', val: stats.redMonth, req: 4 },
-        { t:'mensal', title:'Sede de Mil', desc:'Faça 6 redações no mês', val: stats.redMonth, req: 6 },
-        { t:'mensal', title:'Redator Chefe', desc:'Faça 8 redações no mês', val: stats.redMonth, req: 8 },
-
-        { t:'vitalicia', title:'Matemática I', desc:'100 questões de Mat', val: stats.matQ, req: 100 },
-        { t:'vitalicia', title:'Matemática II', desc:'300 questões de Mat', val: stats.matQ, req: 300 },
-        { t:'vitalicia', title:'Matemática III', desc:'500 questões de Mat', val: stats.matQ, req: 500 },
-
-        { t:'vitalicia', title:'Natureza I', desc:'100 questões de Natureza', val: stats.natQ, req: 100 },
-        { t:'vitalicia', title:'Natureza II', desc:'300 questões de Natureza', val: stats.natQ, req: 300 },
-        { t:'vitalicia', title:'Natureza III', desc:'500 questões de Natureza', val: stats.natQ, req: 500 },
-
-        { t:'vitalicia', title:'Humanas I', desc:'100 questões de Humanas', val: stats.humQ, req: 100 },
-        { t:'vitalicia', title:'Humanas II', desc:'300 questões de Humanas', val: stats.humQ, req: 300 },
-        { t:'vitalicia', title:'Humanas III', desc:'500 questões de Humanas', val: stats.humQ, req: 500 },
-
-        { t:'vitalicia', title:'Linguagens I', desc:'100 questões de Linguagens', val: stats.linQ, req: 100 },
-        { t:'vitalicia', title:'Linguagens II', desc:'300 questões de Linguagens', val: stats.linQ, req: 300 },
-        { t:'vitalicia', title:'Linguagens III', desc:'500 questões de Linguagens', val: stats.linQ, req: 500 },
-
-        { t:'vitalicia', title:'Iniciante', desc:'Acertar/Fazer 50 fáceis', val: stats.facilQ, req: 50 },
-        { t:'vitalicia', title:'Intermediário', desc:'Acertar/Fazer 100 médias', val: stats.medioQ, req: 100 },
-        { t:'vitalicia', title:'Avançado', desc:'Acertar/Fazer 50 difíceis', val: stats.dificilQ, req: 50 },
-        { t:'vitalicia', title:'Dominante', desc:'Acertar/Fazer 150 difíceis', val: stats.dificilQ, req: 150 },
-
-        { t:'vitalicia', title:'A Jornada Começa', desc:'250 totais', val: stats.totalQ, req: 250 },
-        { t:'vitalicia', title:'Focado', desc:'750 totais', val: stats.totalQ, req: 750 },
-        { t:'vitalicia', title:'Quase Lá', desc:'2000 totais', val: stats.totalQ, req: 2000 }
-    ];
-
-    const missContainer = document.getElementById('missions-container');
-    let missHtml = '';
-    missionDefs.forEach(m => {
-        let pct = Math.min((m.val / m.req) * 100, 100);
-        let completed = pct === 100;
-        let cName = completed ? 'var(--success)' : (m.t === 'vitalicia' ? 'var(--success)' : 'var(--primary)');
-        missHtml += `
-            <div class="mission-item" style="border-color: ${completed ? 'var(--success)' : 'var(--border)'}">
-                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                    <span class="mission-type ${m.t}">${m.t}</span>
-                    <span style="font-size:0.8rem; font-weight:bold; color:${cName}">${Math.min(m.val, m.req)} / ${m.req}</span>
-                </div>
-                <div style="font-weight:bold; color:#fff;">${m.title}</div>
-                <div style="font-size:0.8rem; color:var(--dim);">${m.desc}</div>
-                <div class="mission-progress-bg"><div class="mission-progress-fill" style="width:${pct}%; background:${cName}"></div></div>
-            </div>
-        `;
-    });
-    missContainer.innerHTML = missHtml;
+    document.getElementById('medal-container').innerHTML = medals.map(m => `
+        <div class="medal-card ${m.val >= m.target ? 'unlocked' : 'locked'}">
+            <span class="medal-icon">${m.icon}</span><div class="medal-title">${m.title}</div>
+            <div class="medal-desc">${m.desc}</div>
+        </div>`).join('');
 }
 
-// ==========================================
-// NOVOS TEMPORIZADORES INTELIGENTES (BACKGROUND)
-// ==========================================
-let timerObj = { 
-    pomo: { int: null, time: 3000, target: null }, 
-    stop: { int: null, time: 0, start: null } 
-};
-
+let timerObj = { pomo: { int: null, time: 3000 }, stop: { int: null, time: 0, start: null } };
 function formatTime(s) { return `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`; }
 
 function startPomodoro() { 
@@ -679,258 +478,115 @@ function startPomodoro() {
     startPomoReal(); 
 }
 
-function startPomoBreak() { 
-    let mins = document.getElementById('pomo-break-time').value; 
-    timerObj.pomo.time = mins * 60; 
-    startPomoReal(); 
-}
-
 function startPomoReal() {
     clearInterval(timerObj.pomo.int);
-    timerObj.pomo.target = Date.now() + (timerObj.pomo.time * 1000);
-    localStorage.setItem('pomoTarget', timerObj.pomo.target);
-    document.getElementById('pomo-card').classList.add('timer-active');
-    
     timerObj.pomo.int = setInterval(() => {
-        let remaining = Math.max(0, Math.floor((timerObj.pomo.target - Date.now()) / 1000));
-        timerObj.pomo.time = remaining;
-        document.getElementById('pomo-display').innerText = formatTime(remaining);
-        if (remaining <= 0) {
-            pauseTimer('pomo');
-            showAlert("Tempo do Pomodoro Esgotado!");
-            document.getElementById('pomo-card').classList.remove('timer-active');
-        }
+        timerObj.pomo.time--;
+        document.getElementById('pomo-display').innerText = formatTime(timerObj.pomo.time);
+        if (timerObj.pomo.time <= 0) { clearInterval(timerObj.pomo.int); showAlert("Fim do Foco!"); }
     }, 1000);
 }
 
-function pauseTimer(type) { 
-    clearInterval(timerObj[type].int); 
-    if(type === 'pomo') {
-        localStorage.removeItem('pomoTarget');
-        document.getElementById('pomo-card').classList.remove('timer-active');
-    }
-}
+function pauseTimer(type) { clearInterval(timerObj[type].int); }
 
 function startStopwatch() { 
     clearInterval(timerObj.stop.int); 
     timerObj.stop.start = Date.now() - (timerObj.stop.time * 1000);
-    localStorage.setItem('stopStart', timerObj.stop.start);
-    document.getElementById('stop-card').classList.add('timer-active');
-    let limit = document.getElementById('stopwatch-input').value * 60; 
-    
     timerObj.stop.int = setInterval(() => { 
-        let elapsed = Math.floor((Date.now() - timerObj.stop.start) / 1000);
-        if(elapsed <= limit) { 
-            timerObj.stop.time = elapsed;
-            document.getElementById('stop-display').innerText = formatTime(elapsed); 
-        } else { 
-            pauseStopwatch(); 
-            showAlert("Simulado Finalizado!"); 
-        } 
+        timerObj.stop.time = Math.floor((Date.now() - timerObj.stop.start) / 1000);
+        document.getElementById('stop-display').innerText = formatTime(timerObj.stop.time); 
     }, 1000); 
 }
 
-function pauseStopwatch() { 
-    clearInterval(timerObj.stop.int); 
-    localStorage.removeItem('stopStart');
-    document.getElementById('stop-card').classList.remove('timer-active');
-}
-
-function resetStopwatch() { 
-    pauseStopwatch(); 
-    timerObj.stop.time = 0; 
-    document.getElementById('stop-display').innerText = "00:00"; 
-}
-
-function restoreTimers() {
-    let pTarget = localStorage.getItem('pomoTarget');
-    if (pTarget) {
-        let remaining = Math.floor((pTarget - Date.now()) / 1000);
-        if (remaining > 0) {
-            timerObj.pomo.time = remaining;
-            startPomoReal();
-        } else {
-            localStorage.removeItem('pomoTarget');
-            document.getElementById('pomo-display').innerText = "00:00";
-        }
-    }
-    let sStart = localStorage.getItem('stopStart');
-    if (sStart) {
-        timerObj.stop.start = parseInt(sStart);
-        timerObj.stop.time = Math.floor((Date.now() - timerObj.stop.start) / 1000);
-        startStopwatch();
-    }
-}
+function pauseStopwatch() { clearInterval(timerObj.stop.int); }
+function resetStopwatch() { pauseStopwatch(); timerObj.stop.time = 0; document.getElementById('stop-display').innerText = "00:00"; }
+function restoreTimers() {}
 
 function toggleDashDates() { document.getElementById('custom-dates').style.display = (document.getElementById('dash-filter-type').value === 'custom') ? 'flex' : 'none'; }
-function getFilteredTasks() {
-    const type = document.getElementById('dash-filter-type').value; const today = new Date();
-    return currentTasks.filter(t => {
-        if (t.status !== 'done') return false; const taskDateObj = new Date(t.date + 'T12:00:00');
-        if (type === 'week') { const startOfWeek = new Date(today); startOfWeek.setDate(today.getDate() - today.getDay()); const endOfWeek = new Date(startOfWeek); endOfWeek.setDate(startOfWeek.getDate() + 6); return taskDateObj >= new Date(startOfWeek.toISOString().split('T')[0]+'T00:00:00') && taskDateObj <= new Date(endOfWeek.toISOString().split('T')[0]+'T23:59:59'); } 
-        else if (type === 'month') { return taskDateObj.getMonth() === today.getMonth() && taskDateObj.getFullYear() === today.getFullYear(); }
-        else if (type === 'custom') { const startStr = document.getElementById('dash-start').value; const endStr = document.getElementById('dash-end').value; if(!startStr || !endStr) return true; return t.date >= startStr && t.date <= endStr; }
-        return true; 
-    });
-}
+function getFilteredTasks() { return currentTasks.filter(t => t.status === 'done'); }
 
-let donutChart, dailyBarChart, redacaoLine, redacaoMonthChart, timePieChart, qntPieChart, timeBarChart, qntBarChart;
+let donutChart, dailyBarChart;
 function initCharts() {
-    const filteredDoneTasks = getFilteredTasks();
-    if(document.getElementById('redacaoChart')) {
-        if(redacaoLine) redacaoLine.destroy(); if(redacaoMonthChart) redacaoMonthChart.destroy();
-        const redacoes = currentTasks.filter(t => t.type === 'redacao' && t.status === 'done').sort((a,b) => a.date.localeCompare(b.date));
-        redacaoLine = new Chart(document.getElementById('redacaoChart').getContext('2d'), { type: 'line', data: { labels: redacoes.map(r => r.date.split('-').reverse().slice(0,2).join('/')), datasets: [{ label: 'Nota', data: redacoes.map(r => r.score), borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.2)', fill: true, tension: 0.3 }] }, options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 1000, ticks: { color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8' } } }, plugins: { legend: { display: false } } } });
-        let monthCounts = {}; redacoes.forEach(r => { let monthLabel = r.date.substring(0, 7).split('-').reverse().join('/'); monthCounts[monthLabel] = (monthCounts[monthLabel] || 0) + 1; });
-        redacaoMonthChart = new Chart(document.getElementById('redacaoMonthChart').getContext('2d'), { type: 'bar', data: { labels: Object.keys(monthCounts), datasets: [{ label: 'Redações feitas', data: Object.values(monthCounts), backgroundColor: '#f59e0b', borderRadius: 4 }] }, options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1, color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8' } } } } });
-    }
-    if(document.getElementById('accDonutChart')) {
-        if(donutChart) donutChart.destroy(); if(dailyBarChart) dailyBarChart.destroy(); if(timePieChart) timePieChart.destroy(); if(qntPieChart) qntPieChart.destroy(); if(timeBarChart) timeBarChart.destroy(); if(qntBarChart) qntBarChart.destroy();   
-        let totalHits = 0, totalErrors = 0, totalTime = 0; const dailyQuestions = {}; const timeData = {}; const qntData = {};
-        filteredDoneTasks.forEach(t => {
-            let matLida = t.materia === "Geral" ? "Questões" : t.materia;
-            if(t.realTime) timeData[matLida] = (timeData[matLida] || 0) + t.realTime;
-            if((t.type === 'questoes' || t.type === 'simulado') && t.hits !== undefined && t.errors !== undefined) {
-                totalHits += t.hits; totalErrors += t.errors; if(t.realTime) totalTime += t.realTime;
-                dailyQuestions[t.date] = (dailyQuestions[t.date] || 0) + (t.hits + t.errors); qntData[matLida] = (qntData[matLida] || 0) + (t.hits + t.errors);
-            }
-        });
-        const totalQ = totalHits + totalErrors;
-        document.getElementById('stat-accuracy').innerText = (totalQ > 0 ? ((totalHits / totalQ) * 100).toFixed(0) : 0) + '%';
-        if(document.getElementById('stat-total-q-dash')) document.getElementById('stat-total-q-dash').innerText = totalQ; document.getElementById('stat-hits').innerText = totalHits;
-        document.getElementById('stat-errors').innerText = totalErrors; document.getElementById('stat-avg-time').innerText = (totalQ > 0 ? Math.floor((totalTime * 60) / totalQ) : 0) + 's';
-        document.getElementById('center-donut-text').innerHTML = `${totalQ}<br><span style="font-size:0.8rem; font-weight:normal; color:var(--dim)">questões</span>`;
-        donutChart = new Chart(document.getElementById('accDonutChart').getContext('2d'), { type: 'doughnut', data: { labels: ['Certas', 'Erradas'], datasets: [{ data: [totalHits, totalErrors], backgroundColor: ['#22c55e', '#ef4444'], borderWidth: 0, cutout: '75%' }] }, options: { plugins: { legend: { position: 'bottom', labels: { color: '#f1f5f9', padding: 20 } } } } });
-        const sortedDates = Object.keys(dailyQuestions).sort();
-        dailyBarChart = new Chart(document.getElementById('dailyBarChart').getContext('2d'), { type: 'bar', data: { labels: sortedDates.map(d => d.split('-').reverse().slice(0,2).join('/')), datasets: [{ label: 'Questões Feitas', data: sortedDates.map(d => dailyQuestions[d]), backgroundColor: '#38bdf8', borderRadius: 4 }] }, options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { color: '#94a3b8', stepSize: 5 } }, x: { ticks: { color: '#94a3b8' } } }, plugins: { legend: { display: false } } } });
-        timePieChart = new Chart(document.getElementById('timePieChart').getContext('2d'), { type: 'pie', data: { labels: Object.keys(timeData), datasets: [{ data: Object.values(timeData), backgroundColor: Object.keys(timeData).map(getColor), borderWidth: 0 }] }, options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#f1f5f9' } } } } });
-        timeBarChart = new Chart(document.getElementById('timeBarChart').getContext('2d'), { type: 'bar', data: { labels: Object.keys(timeData), datasets: [{ label: 'Minutos Estudados', data: Object.values(timeData), backgroundColor: Object.keys(timeData).map(getColor), borderRadius: 4 }] }, options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { title: { display: true, text: 'Minutos', color: '#94a3b8' }, ticks: { color: '#94a3b8' } }, y: { ticks: { color: '#94a3b8' } } } } });
-        qntPieChart = new Chart(document.getElementById('qntPieChart').getContext('2d'), { type: 'pie', data: { labels: Object.keys(qntData), datasets: [{ data: Object.values(qntData), backgroundColor: Object.keys(qntData).map(getColor), borderWidth: 0 }] }, options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#f1f5f9' } } } } });
-        qntBarChart = new Chart(document.getElementById('qntBarChart').getContext('2d'), { type: 'bar', data: { labels: Object.keys(qntData), datasets: [{ label: 'Quantidade de Questões', data: Object.values(qntData), backgroundColor: Object.keys(qntData).map(getColor), borderRadius: 4 }] }, options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { title: { display: true, text: 'Questões Feitas', color: '#94a3b8' }, ticks: { color: '#94a3b8', stepSize: 1 } }, y: { ticks: { color: '#94a3b8' } } } } });
-    }
+    const tasks = getFilteredTasks();
+    if(donutChart) donutChart.destroy();
+    const hits = tasks.reduce((a,t) => a + (t.hits||0), 0);
+    const errs = tasks.reduce((a,t) => a + (t.errors||0), 0);
+    donutChart = new Chart(document.getElementById('accDonutChart'), { type: 'doughnut', data: { labels: ['Acertos', 'Erros'], datasets: [{ data: [hits, errs], backgroundColor: ['#22c55e', '#ef4444'] }] } });
 }
-
-// O sistema busca a chave no seu navegador, não no código público.
-let GEMINI_API_KEY = localStorage.getItem('gemini_api_key') || "";
 
 const iaQuestions = [
-    { q: "Qual sua média geral atual?", o: ["Abaixo de 600", "Entre 600 e 700", "Entre 700 e 750", "Acima de 750"] },
-    { q: "Como está sua base em Matemática Básica?", o: ["Ruim (Travo em frações)", "Regular (Lembro o básico)", "Boa (Domino a base)", "Excelente (Cálculo rápido)"] },
-    { q: "Qual sua maior dificuldade em Natureza?", o: ["Interpretação", "Fórmulas", "Contas Rápidas", "Teoria Aplicada"] },
-    { q: "Como está seu desempenho na Redação?", o: ["Menos de 600", "Entre 600 e 720", "800+", "900+ fácil"] },
-    { q: "Qual área você mais negligencia?", o: ["Linguagens", "Humanas", "Natureza", "Matemática"] },
-    { q: "Horas livres para estudar por dia?", o: ["1 a 2 horas", "3 a 4 horas", "5 a 6 horas", "7+ horas"] },
-    { q: "Qual seu nível de foco atual?", o: ["Me distraio muito", "Celular atrapalha", "Foco por até 2h", "Mente Blindada Ativo"] },
-    { q: "Frequência de revisão?", o: ["Nunca reviso", "Só pré-simulado", "Semanalmente", "Anki/Flashcards"] },
-    { q: "Como prefere aprender?", o: ["Videoaula", "50% Vídeo / 50% Exercício", "20% Teoria / 80% Prática", "Só Questões"] },
-    { q: "Melhor turno de produtividade?", o: ["Manhã", "Tarde", "Noite", "Madrugada"] },
-    { q: "Tempo de prova nos simulados?", o: ["Falta tempo sempre", "Termino no limite", "Termino com calma", "Sobra muito tempo"] },
-    { q: "Conhecimento sobre TRI?", o: ["Não sei o que é", "Sei mas não aplico", "Priorizo as fáceis", "Estratégia completa"] },
-    { q: "Objetivo principal?", o: ["Começar do zero", "Vencer o edital", "Refinar a nota", "Alta concorrência (UFMG)"] },
-    { q: "Simulados por mês?", o: ["Nenhum", "1 por mês", "2 por mês", "4 por mês"] },
-    { q: "Maior fraqueza emocional?", o: ["Procrastinação", "Ansiedade", "Cansaço", "Perfeccionismo"] }
+    { q: "Qual sua média atual?", o: ["Abaixo 600", "600-700", "700-750", "750+"] },
+    { q: "Horas livres?", o: ["1-2h", "3-4h", "5-6h", "7h+"] },
+    { q: "Maior dificuldade?", o: ["Matemática", "Natureza", "Humanas", "Linguagens"] }
 ];
 
 let currentIAQuestion = 0;
 let userIAResponses = [];
 
 function startIAQuestionnaire() {
-    currentIAQuestion = 0;
-    userIAResponses = [];
+    currentIAQuestion = 0; userIAResponses = [];
     document.getElementById('modal-ia-questions').style.display = 'flex';
+    document.getElementById('question-container').style.display = 'block';
+    document.getElementById('ia-loading').style.display = 'none';
     showIAQuestion();
 }
 
 function showIAQuestion() {
     const q = iaQuestions[currentIAQuestion];
-    document.getElementById('ia-q-title').innerText = `Pergunta ${currentIAQuestion + 1} de 15`;
+    document.getElementById('ia-q-title').innerText = `Pergunta ${currentIAQuestion + 1}`;
     document.getElementById('ia-q-text').innerText = q.q;
     const optionsDiv = document.getElementById('ia-options');
     optionsDiv.innerHTML = '';
-    q.o.forEach((opt, i) => {
+    q.o.forEach(opt => {
         const btn = document.createElement('button');
         btn.className = 'btn-action';
-        btn.style.background = 'var(--card)';
-        btn.style.border = '1px solid var(--border)';
-        btn.style.textAlign = 'left';
         btn.innerText = opt;
-        btn.onclick = () => handleIAAnswer(opt);
+        btn.onclick = () => { userIAResponses.push(opt); currentIAQuestion++; if(currentIAQuestion < iaQuestions.length) showIAQuestion(); else generateCronogramaIA(); };
         optionsDiv.appendChild(btn);
     });
 }
 
-function handleIAAnswer(answer) {
-    userIAResponses.push(answer);
-    currentIAQuestion++;
-    if (currentIAQuestion < iaQuestions.length) {
-        showIAQuestion();
-    } else {
-        generateCronogramaIA();
-    }
-}
-
 async function generateCronogramaIA() {
-    // ADICIONE ISSO AQUI:
     if (!GEMINI_API_KEY) {
         closeModal('modal-ia-questions');
         setApiKey();
         return;
     }
-    
-    // O resto do seu código continua aqui...//
-    document.getElementById('question-container').style.display = 'none';
-    
     document.getElementById('question-container').style.display = 'none';
     document.getElementById('ia-loading').style.display = 'block';
-
-    const prompt = `
-        Aja como um mentor do ENEM. Usuário busca 800+ na UFMG.
-        Respostas do Perfil: ${userIAResponses.join(", ")}.
-        
-        Sua tarefa: Gerar um JSON de cronograma para os próximos 7 dias úteis.
-        Use APENAS matérias desta lista: [Citologia, Evolução, Ecologia, Fisiologia Humana, Genética, Estequiometria, Química Orgânica, Termoquímica, Eletrodinâmica, Ondulatória, Cinemática, Era Vargas, Idade Moderna, Filosofia Política, Geopolítica, Estatística, Geometria Plana/Espacial, Probabilidade, Análise Combinatória, Razão e Proporção, Figuras de Linguagem, Literatura].
-        
-        Formato do JSON (array de objetos):
-        [{"date": "YYYY-MM-DD", "type": "aula|questoes|simulado|redacao", "materia": "Nome", "content": "Tópico da Lista", "startTime": "HH:MM", "endTime": "HH:MM"}]
-        
-        Regras:
-        1. Se o perfil for fraco em Matemática, foque em fundamentos.
-        2. Alterne teoria e questões.
-        3. Retorne APENAS o JSON, sem textos extras.
-    `;
-
+    const prompt = `Aja como mentor do ENEM. Gere cronograma JSON 7 dias. Perfil: ${userIAResponses.join(",")}. JSON: [{"date":"YYYY-MM-DD","type":"aula","materia":"Matemática","content":"Base","startTime":"08:00","endTime":"09:00"}]`;
     try {
-       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-})
-        
-        
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
         const data = await response.json();
-        const rawResponse = data.candidates[0].content.parts[0].text;
-        const tasks = JSON.parse(rawResponse.replace(/```json|```/g, ""));
-
+        const raw = data.candidates[0].content.parts[0].text;
+        const tasks = JSON.parse(raw.replace(/```json|```/g, ""));
         const batch = db.batch();
         tasks.forEach(t => {
-            const docRef = db.collection("tasks").doc();
-            batch.set(docRef, { ...t, userId: auth.currentUser.uid, status: 'pending', reviewed: false });
+            const ref = db.collection("tasks").doc();
+            batch.set(ref, { ...t, userId: auth.currentUser.uid, status: 'pending' });
         });
-        
         await batch.commit();
         closeModal('modal-ia-questions');
-        showAlert("Cronograma Inteligente gerado e aplicado ao seu calendário!");
+        showAlert("Cronograma aplicado!");
     } catch (e) {
-        console.error(e);
-        showAlert("Erro ao gerar cronograma. Verifique sua chave de API.");
+        showAlert("Erro na IA. Verifique sua chave.");
         closeModal('modal-ia-questions');
     }
 }
+
 function setApiKey() {
-    const key = prompt("Por favor, insira sua Gemini API Key para ativar a IA:");
+    const key = prompt("⚠️ COLE AQUI A CHAVE DO 'AI STUDIO' (NÃO use a do Firebase!):");
     if (key) {
+        if (key.includes("AIzaSyDAozYq")) {
+            showAlert("Opa! Você colou a chave do Firebase. Pegue a chave nova no Google AI Studio!");
+            return;
+        }
         localStorage.setItem('gemini_api_key', key);
         GEMINI_API_KEY = key;
-        showAlert("Chave configurada! Clique em gerar cronograma novamente.");
+        showAlert("Chave salva! Tente gerar o cronograma novamente.");
     }
 }
