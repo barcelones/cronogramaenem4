@@ -810,8 +810,8 @@ function initCharts() {
     }
 }
 
-// CONFIGURAÇÃO DA IA
-const GEMINI_API_KEY = "AIzaSyC5SaCT-6fbCRQroQ2hMdrwABoQlzoW2ro"; // Jogue sua chave aqui
+// O sistema busca a chave no seu navegador, não no código público.
+let GEMINI_API_KEY = localStorage.getItem('gemini_api_key') || "";
 
 const iaQuestions = [
     { q: "Qual sua média geral atual?", o: ["Abaixo de 600", "Entre 600 e 700", "Entre 700 e 750", "Acima de 750"] },
@@ -870,6 +870,16 @@ function handleIAAnswer(answer) {
 }
 
 async function generateCronogramaIA() {
+    // ADICIONE ISSO AQUI:
+    if (!GEMINI_API_KEY) {
+        closeModal('modal-ia-questions');
+        setApiKey();
+        return;
+    }
+    
+    // O resto do seu código continua aqui...//
+    document.getElementById('question-container').style.display = 'none';
+    
     document.getElementById('question-container').style.display = 'none';
     document.getElementById('ia-loading').style.display = 'block';
 
@@ -912,5 +922,13 @@ async function generateCronogramaIA() {
         console.error(e);
         showAlert("Erro ao gerar cronograma. Verifique sua chave de API.");
         closeModal('modal-ia-questions');
+    }
+}
+function setApiKey() {
+    const key = prompt("Por favor, insira sua Gemini API Key para ativar a IA:");
+    if (key) {
+        localStorage.setItem('gemini_api_key', key);
+        GEMINI_API_KEY = key;
+        showAlert("Chave configurada! Clique em gerar cronograma novamente.");
     }
 }
