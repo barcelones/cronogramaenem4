@@ -1,22 +1,31 @@
+// =====================================================================
+// CONFIGURAÇÕES DO FIREBASE
+// =====================================================================
 const firebaseConfig = {
-    apiKey: "AIzaSyDAozYqHIjJe-ptzkVIfqLMC2XTyMG0GaI", authDomain: "meucronogramaenem.firebaseapp.com",
-    projectId: "meucronogramaenem", storageBucket: "meucronogramaenem.firebasestorage.app",
-    messagingSenderId: "933774063012", appId: "1:933774063012:web:5f3556ea2c0f1885a4bd31"
+    apiKey: "AIzaSyDAozYqHIjJe-ptzkVIfqLMC2XTyMG0GaI", 
+    authDomain: "meucronogramaenem.firebaseapp.com",
+    projectId: "meucronogramaenem", 
+    storageBucket: "meucronogramaenem.firebasestorage.app",
+    messagingSenderId: "933774063012", 
+    appId: "1:933774063012:web:5f3556ea2c0f1885a4bd31"
 };
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+// =====================================================================
+// VARIÁVEIS GLOBAIS
+// =====================================================================
 let currentTasks = [], selectedDate = null, activeTask = null, editingTaskId = null;
 let uploadedImageBase64 = "", tempRedacaoPhoto = "", activeTaskFilter = 'all';
 
-// =====================================================================
-// A CHAVE DE API AGORA É CONFIGURADA NAS CONFIGURAÇÕES DO SITE
-// Ela fica salva apenas no seu navegador (localStorage)
-// =====================================================================
+// A chave de API agora é puxada com segurança do navegador
 let GEMINI_API_KEY = localStorage.getItem('gemini_api_key') || "";
 
+// =====================================================================
+// FUNÇÕES DE INTERFACE E ALERTAS
+// =====================================================================
 function showAlert(msg) {
     document.getElementById('alert-message').innerText = msg;
     document.getElementById('modal-alert').style.display = 'flex';
@@ -37,6 +46,7 @@ const subjectColors = {
     "1º Dia (Ling/Humanas)": "#d946ef", "2º Dia (Mat/Natureza)": "#84cc16",
     "Questões": "#fbbf24", "Geral": "#fbbf24"
 };
+
 function getColor(materia) { return subjectColors[materia] || '#94a3b8'; }
 
 const defaultTopics = {
@@ -77,6 +87,9 @@ async function resetPlatform() {
     } catch (e) { showAlert("Erro ao zerar: " + e.message); }
 }
 
+// =====================================================================
+// CONTAGEM REGRESSIVA ENEM
+// =====================================================================
 function updateCountdown() {
     const anoTexto = document.getElementById('edit-ano').innerText;
     const match = anoTexto.match(/\d{4}/);
@@ -116,6 +129,9 @@ async function saveEdits() {
     updateCountdown();
 }
 
+// =====================================================================
+// UPLOADS E CONFIGURAÇÕES DE PERFIL
+// =====================================================================
 function handleFileUpload(event) { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = function (e) { uploadedImageBase64 = e.target.result; document.getElementById('set-photo').value = "Imagem carregada"; document.getElementById('set-photo').disabled = true; }; reader.readAsDataURL(file); }
 function handleRedacaoPhotoUpload(event) { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = function (e) { tempRedacaoPhoto = e.target.result; }; reader.readAsDataURL(file); }
 
@@ -125,7 +141,7 @@ function openSettings() {
     if (localPhoto && localPhoto.startsWith('data:image')) { document.getElementById('set-photo').value = "Imagem carregada"; document.getElementById('set-photo').disabled = true; }
     else { document.getElementById('set-photo').value = localPhoto || auth.currentUser.photoURL || ''; document.getElementById('set-photo').disabled = false; }
     
-    // Carregar chave do Gemini
+    // Carrega a chave do Gemini salva localmente
     document.getElementById('set-gemini-key').value = localStorage.getItem('gemini_api_key') || '';
     
     document.getElementById('modal-settings').style.display = 'flex';
@@ -135,21 +151,27 @@ async function saveSettings() {
     const name = document.getElementById('set-name').value; 
     let photo = document.getElementById('set-photo').value;
     const geminiKey = document.getElementById('set-gemini-key').value;
+    
     try {
-        if (uploadedImageBase64) localStorage.setItem('custom_profile_pic', uploadedImageBase64); else if (photo !== "Imagem carregada") localStorage.setItem('custom_profile_pic', photo);
+        if (uploadedImageBase64) localStorage.setItem('custom_profile_pic', uploadedImageBase64); 
+        else if (photo !== "Imagem carregada") localStorage.setItem('custom_profile_pic', photo);
         
-        // Salvar chave do Gemini
+        // Salva e atualiza a chave do Gemini
         localStorage.setItem('gemini_api_key', geminiKey.trim());
         GEMINI_API_KEY = geminiKey.trim();
 
         await auth.currentUser.updateProfile({ displayName: name });
         document.getElementById('user-name').innerText = name.split(' ')[0];
         document.getElementById('user-pic').src = localStorage.getItem('custom_profile_pic') || auth.currentUser.photoURL || 'https://via.placeholder.com/70';
+        
         closeModal('modal-settings');
         showAlert("Perfil atualizado com sucesso!");
     } catch (e) { showAlert("Erro ao atualizar: " + e.message); }
 }
 
+// =====================================================================
+// AUTENTICAÇÃO E INICIALIZAÇÃO
+// =====================================================================
 const months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 const monthSelect = document.getElementById('cal-month'), yearSelect = document.getElementById('cal-year');
 months.forEach((m, i) => { let opt = document.createElement('option'); opt.value = i; opt.innerText = m; monthSelect.appendChild(opt); });
@@ -165,6 +187,7 @@ function checkNotifications() {
     if (hasUnreviewedErrors) { if (!lastNotif || (nowTime - parseInt(lastNotif)) > oneWeek) { if (Math.random() < 0.3) { needsNotif = true; localStorage.setItem('last_review_notif', nowTime.toString()); } } } else { localStorage.setItem('has_unread_notif', 'false'); }
     if (needsNotif || localStorage.getItem('has_unread_notif') === 'true') { document.getElementById('notif-badge').style.display = 'block'; localStorage.setItem('has_unread_notif', 'true'); } else { document.getElementById('notif-badge').style.display = 'none'; }
 }
+
 function openNotifications() { document.getElementById('notif-badge').style.display = 'none'; localStorage.setItem('has_unread_notif', 'false'); document.getElementById('modal-notif').style.display = 'flex'; }
 
 auth.onAuthStateChanged(user => {
@@ -184,6 +207,9 @@ function showPage(id, btn) {
     if (id === 'desempenho' || id === 'redacao' || id === 'conquistas') { initCharts(); renderConquistas(); }
 }
 
+// =====================================================================
+// GESTÃO DE TAREFAS E CALENDÁRIO
+// =====================================================================
 function toggleChart(type) {
     const selectVal = document.getElementById(`${type}-chart-type`).value;
     if (selectVal === 'pie') { document.getElementById(`${type}-pie-container`).style.display = 'block'; document.getElementById(`${type}-bar-container`).style.display = 'none'; }
@@ -218,17 +244,21 @@ function renderCalendar() {
     const month = parseInt(monthSelect.value), year = parseInt(yearSelect.value), body = document.getElementById('calendar-body');
     body.innerHTML = '<div class="day-label">Dom</div><div class="day-label">Seg</div><div class="day-label">Ter</div><div class="day-label">Qua</div><div class="day-label">Qui</div><div class="day-label">Sex</div><div class="day-label">Sáb</div>';
     const firstDay = new Date(year, month, 1).getDay(), daysInMonth = new Date(year, month + 1, 0).getDate(), todayStr = new Date().toISOString().split('T')[0];
+    
     for (let i = 0; i < firstDay; i++) body.innerHTML += '<div></div>';
+    
     for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
         const dayTasks = currentTasks.filter(t => t.date === dateStr).sort((a, b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
         const dayDiv = document.createElement('div'); dayDiv.className = `day-box ${todayStr === dateStr ? 'today' : ''}`;
         dayDiv.onclick = () => { selectedDate = dateStr; document.getElementById('daily-date-label').innerText = `Dia ${dateStr.split('-').reverse().join('/')}`; renderDailyTasks(dateStr); document.getElementById('modal-daily').style.display = 'flex'; };
+        
         let html = `<span class="day-num">${d}</span>`;
         dayTasks.forEach(t => {
             let isRedacaoMedal = (t.type === 'redacao' && t.status === 'done' && t.metaRedacao && t.score >= t.metaRedacao) ? ' 🏆' : '';
             html += `<div class="tag ${t.type}" style="${t.status === 'done' ? 'opacity:0.6; text-decoration:line-through;' : ''}">${t.startTime ? t.startTime + ' - ' : ''}${t.materia}${isRedacaoMedal}</div>`;
         });
+        
         dayDiv.innerHTML = html; body.appendChild(dayDiv);
     }
 }
@@ -247,7 +277,8 @@ function renderDailyTasks(dateStr) {
                     <div class="title">${titleText}</div>
                     <div style="margin-top: 5px;"><button class="btn-edit" onclick="openEditModal('${t.id}')">✏️ Editar</button></div>
                  </div>`;
-    }); list.innerHTML = html;
+    }); 
+    list.innerHTML = html;
 }
 
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
@@ -255,10 +286,12 @@ function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 async function handleSaveTask() {
     const type = document.getElementById('task-type').value, materia = document.getElementById('task-materia').value, contentElem = document.getElementById('task-content'), qntElem = document.getElementById('task-qnt'), startTime = document.getElementById('task-start-time').value, endTime = document.getElementById('task-end-time').value, metaRedacaoElem = document.getElementById('task-meta-redacao');
     let plannedTime = 0;
+    
     if (startTime && endTime) {
         plannedTime = (new Date(`1970-01-01T${endTime}:00`) - new Date(`1970-01-01T${startTime}:00`)) / 60000;
         if (plannedTime <= 0) return showAlert("O horário final precisa ser maior que o de início.");
     }
+    
     let contentVal = contentElem ? contentElem.value : '';
     if ((type === 'aula' || type === 'questoes') && contentVal) saveCustomTopic(materia, contentVal);
 
@@ -274,7 +307,9 @@ async function handleSaveTask() {
         plannedTime,
         reviewed: false
     };
+    
     if (type === 'redacao' && metaRedacaoElem && !editingTaskId) { taskData.metaRedacao = parseInt(metaRedacaoElem.value) || 0; }
+    
     if (editingTaskId) {
         const oldTask = currentTasks.find(t => t.id === editingTaskId);
         if (oldTask && oldTask.reviewed !== undefined) taskData.reviewed = oldTask.reviewed;
@@ -286,12 +321,15 @@ async function handleSaveTask() {
         document.getElementById('modal-success').style.display = 'flex';
         return;
     }
+    
     taskData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
     const repeat = document.getElementById('task-repeat').checked, baseDate = new Date(selectedDate + 'T12:00:00');
+    
     for (let i = 0; i < (repeat ? 3 : 1); i++) {
         const d = new Date(baseDate); d.setDate(d.getDate() + (i * 7));
         taskData.date = d.toISOString().split('T')[0]; await db.collection("tasks").add(taskData);
     }
+    
     closeModal('modal-task');
     loadTasks();
     document.getElementById('modal-success').style.display = 'flex';
@@ -333,6 +371,7 @@ function renderCard(t, statusClass, statusText) {
     let photoBtn = (t.type === 'redacao' && t.photo) ? `<button class="btn-edit" style="color:var(--primary); border-color:var(--primary);" onclick="openPhotoModal('${t.photo}')">📷 Ver Foto</button>` : '';
     let diffHtml = t.difficulty ? `<span class="difficulty-badge diff-${t.difficulty}">${t.difficulty}</span>` : '';
     let scoreHtml = '';
+    
     if (t.score !== undefined) {
         if (t.type === 'redacao' && t.metaRedacao) {
             let scoreColor = 'var(--purple)', scoreText = `Nota: ${t.score} (Meta: ${t.metaRedacao})`;
@@ -341,6 +380,7 @@ function renderCard(t, statusClass, statusText) {
             scoreHtml = `<div style="color:${scoreColor}; font-weight:bold; margin-top:5px;">🎯 ${scoreText}</div>`;
         } else { scoreHtml = `<div style="color:var(--purple); font-weight:bold; margin-top:5px;">Nota: ${t.score}</div>`; }
     }
+    
     let editBtnHtml = `<button class="btn-edit" onclick="openEditModal('${t.id}')">✏️ Editar</button>`;
     if (t.type === 'redacao' && statusClass === 'done') editBtnHtml = '';
 
@@ -366,19 +406,31 @@ function renderTaskList() {
     const listPending = document.getElementById('tasks-pending-list'), listIncomplete = document.getElementById('tasks-incomplete-list'), listDone = document.getElementById('tasks-done-list'), redacaoList = document.getElementById('redacao-list');
     listPending.innerHTML = ""; listIncomplete.innerHTML = ""; listDone.innerHTML = ""; redacaoList.innerHTML = "";
     const today = new Date().toISOString().split('T')[0]; let redacaoArr = [];
+    
     currentTasks.forEach(t => {
         let statusClass = t.status === 'done' ? 'done' : (t.date < today ? 'incomplete' : '');
         let statusText = t.status === 'done' ? 'CONCLUÍDO' : (t.date < today ? 'ATRASADA' : 'PENDENTE');
         let card = renderCard(t, statusClass, statusText);
-        if (t.type === 'redacao') { t._statusWeight = statusClass === 'done' ? 1 : (statusClass === 'incomplete' ? 3 : 2); redacaoArr.push({ task: t, card: card }); }
-        else {
+        if (t.type === 'redacao') { 
+            t._statusWeight = statusClass === 'done' ? 1 : (statusClass === 'incomplete' ? 3 : 2); 
+            redacaoArr.push({ task: t, card: card }); 
+        } else {
             if (activeTaskFilter !== 'all' && t.type !== activeTaskFilter) return;
-            if (statusClass === 'done') listDone.appendChild(card); else if (statusClass === 'incomplete') listIncomplete.appendChild(card); else listPending.appendChild(card);
+            if (statusClass === 'done') listDone.appendChild(card); 
+            else if (statusClass === 'incomplete') listIncomplete.appendChild(card); 
+            else listPending.appendChild(card);
         }
     });
-    redacaoArr.sort((a, b) => { if (a.task._statusWeight !== b.task._statusWeight) return a.task._statusWeight - b.task._statusWeight; return b.task.date.localeCompare(a.task.date); }).forEach(item => redacaoList.appendChild(item.card));
+    
+    redacaoArr.sort((a, b) => { 
+        if (a.task._statusWeight !== b.task._statusWeight) return a.task._statusWeight - b.task._statusWeight; 
+        return b.task.date.localeCompare(a.task.date); 
+    }).forEach(item => redacaoList.appendChild(item.card));
 }
 
+// =====================================================================
+// AVALIAÇÕES E REVISÕES
+// =====================================================================
 function openPhotoModal(imgSrc) { document.getElementById('view-photo-img').src = imgSrc; document.getElementById('modal-photo-view').style.display = 'flex'; }
 function openImprovementModal() { document.getElementById('modal-improvement').style.display = 'flex'; }
 
@@ -400,6 +452,7 @@ function openDifficultyDetails(diff) {
 function renderReviewSection() {
     const reviewList = document.getElementById('review-list'), improveList = document.getElementById('improve-list');
     let reviewHtml = ''; let matStats = {}; let reviewedCount = 0; let pendingCount = 0;
+    
     currentTasks.forEach(t => {
         let matLida = t.materia === "Geral" ? "Questões" : t.materia;
         if (t.status === 'done' && (t.type === 'questoes' || t.type === 'simulado')) {
@@ -416,6 +469,7 @@ function renderReviewSection() {
             }
         }
     });
+    
     reviewList.innerHTML = reviewHtml || '<div style="text-align:center; padding: 20px 0; color:var(--dim);">Tudo limpo! 🎉</div>';
     document.getElementById('imp-reviewed-count').innerText = reviewedCount;
     document.getElementById('imp-pending-count').innerText = pendingCount;
@@ -430,6 +484,7 @@ function openDoneModal(id) {
     const container = document.getElementById('done-dynamic-fields');
     document.getElementById('difficulty-selection').style.display = (activeTask.type === 'questoes' || activeTask.type === 'simulado') ? 'block' : 'none';
     let html = '';
+    
     if (activeTask.type === 'redacao') {
         html = `<input type="number" id="done-score" placeholder="Nota da Redação (0 - 1000)">
                 <input type="file" id="done-redacao-file" accept="image/*" onchange="handleRedacaoPhotoUpload(event)">`;
@@ -485,7 +540,11 @@ function renderConquistas() {
         </div>`).join('');
 }
 
+// =====================================================================
+// CRONÔMETROS E GRÁFICOS
+// =====================================================================
 let timerObj = { pomo: { int: null, time: 3000 }, stop: { int: null, time: 0, start: null } };
+
 function formatTime(s) { return `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`; }
 
 function startPomodoro() {
@@ -527,9 +586,15 @@ function initCharts() {
     if (donutChart) donutChart.destroy();
     const hits = tasks.reduce((a, t) => a + (t.hits || 0), 0);
     const errs = tasks.reduce((a, t) => a + (t.errors || 0), 0);
-    donutChart = new Chart(document.getElementById('accDonutChart'), { type: 'doughnut', data: { labels: ['Acertos', 'Erros'], datasets: [{ data: [hits, errs], backgroundColor: ['#22c55e', '#ef4444'] }] } });
+    const chartElem = document.getElementById('accDonutChart');
+    if (chartElem) {
+        donutChart = new Chart(chartElem, { type: 'doughnut', data: { labels: ['Acertos', 'Erros'], datasets: [{ data: [hits, errs], backgroundColor: ['#22c55e', '#ef4444'] }] } });
+    }
 }
 
+// =====================================================================
+// INTELIGÊNCIA ARTIFICIAL (GEMINI API) E QUESTIONÁRIO
+// =====================================================================
 const iaQuestions = [
     { q: "Qual sua média atual estimada?", o: ["Abaixo de 600", "600-700", "700-750", "Acima de 750"] },
     { q: "Qual curso você quer?", o: ["Medicina", "Engenharia/Computação", "Direito/Humanas", "Outros"] },
@@ -565,6 +630,7 @@ function showIAQuestion() {
     document.getElementById('ia-q-text').innerText = q.q;
     const optionsDiv = document.getElementById('ia-options');
     optionsDiv.innerHTML = '';
+    
     q.o.forEach(opt => {
         const btn = document.createElement('button');
         btn.className = 'btn-action';
@@ -580,11 +646,10 @@ function showIAQuestion() {
 }
 
 async function generateCronogramaIA() {
-    // Verifica se a chave está disponível
     if (!GEMINI_API_KEY) {
         closeModal('modal-ia-questions');
         showAlert("⚠️ Chave do Gemini não configurada. Por favor, adicione sua chave nas Configurações.");
-        openSettings(); // Abre as configurações para o usuário colar a chave
+        openSettings(); 
         return;
     }
 
@@ -592,10 +657,9 @@ async function generateCronogramaIA() {
     document.getElementById('ia-loading').style.display = 'block';
 
     const hoje = new Date().toISOString().split('T')[0];
-    const prompt = `Você é um Mentor de Aprovação do ENEM especialista no método "Mente Blindada". Seu objetivo é levar o estudante Rafael aos 800+ de média geral para cursar Ciência da Computação na UFMG.
+    const prompt = `Você é um Mentor de Aprovação do ENEM especialista no método "Mente Blindada". Seu objetivo é estruturar o aprendizado visando a meta de 800+ de média geral.
 
 Contexto do Usuário:
-- Nome: Rafael (19 anos, BH)
 - Foco: ENEM 2026
 - Respostas do Perfil: ${userIAResponses.join(", ")}
 - Data de Início: ${hoje}
@@ -606,7 +670,7 @@ Gere um cronograma de estudos para os próximos 7 dias úteis. Você deve priori
 Regras Estritas:
 1. Use APENAS estas matérias: [Matemática, Biologia, Física, Química, História, Geografia, Filosofia, Sociologia, Linguagens].
 2. O conteúdo deve ser específico (Ex: em vez de "Biologia", use "Transporte Passivo" ou "Citologia").
-3. Retorne APENAS um array JSON puro, sem textos explicativos, sem Markdown (sem aspas triplas \`\`\`), pronto para ser lido por um script.
+3. Retorne APENAS um array JSON puro, sem textos explicativos, sem Markdown (sem aspas triplas), pronto para ser lido por um script.
 
 Estrutura do JSON:
 [
@@ -637,7 +701,9 @@ Estrutura do JSON:
 
         const data = await response.json();
         const raw = data.candidates[0].content.parts[0].text;
-        const cleanJson = raw.replace(/```json|```/g, "").trim();
+        
+        // Limpeza rigorosa do JSON para evitar Unexpected Token
+        const cleanJson = raw.replace(/```json|```/gi, "").trim();
         const tasks = JSON.parse(cleanJson);
 
         if (!Array.isArray(tasks) || tasks.length === 0) throw new Error("Resposta da IA inválida.");
@@ -653,6 +719,7 @@ Estrutura do JSON:
                 reviewed: false
             });
         });
+        
         await batch.commit();
 
         closeModal('modal-ia-questions');
