@@ -1,319 +1,280 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Plataforma ENEM 800+ | Grupo Conexão</title>
+// Configurações Iniciais do Firebase (Mantenha as suas originais)
+const firebaseConfig = {
+    apiKey: "AIzaSyDAozYqHIjJe-ptzkVIfqLMC2XTyMG0GaI", 
+    authDomain: "meucronogramaenem.firebaseapp.com",
+    projectId: "meucronogramaenem", 
+    storageBucket: "meucronogramaenem.firebasestorage.app",
+    messagingSenderId: "933774063012", 
+    appId: "1:933774063012:web:5f3556ea2c0f1885a4bd31"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// Variáveis de Estado
+let currentTasks = [], selectedDate = null, activeTask = null, editingTaskId = null;
+let uploadedImageBase64 = "", tempRedacaoPhoto = "", activeTaskFilter = 'all';
+
+// Puxa a chave do Gemini do navegador (Mantendo separada para segurança)
+let GEMINI_API_KEY = localStorage.getItem('gemini_api_key') || "";
+
+// ==========================================
+// FUNÇÕES DE INTERFACE E ALERTAS
+// ==========================================
+function showAlert(msg) {
+    document.getElementById('alert-message').innerText = msg;
+    document.getElementById('modal-alert').style.display = 'flex';
+}
+
+function toggleTaskFilter(type) {
+    if (activeTaskFilter === type) activeTaskFilter = 'all'; else activeTaskFilter = type; 
+    document.querySelectorAll('.filter-btn').forEach(btn => btn.style.opacity = '0.3');
+    if (activeTaskFilter !== 'all') document.getElementById('filter-' + type).style.opacity = '1';
+    else document.querySelectorAll('.filter-btn').forEach(btn => btn.style.opacity = '1');
+    renderTaskList(); 
+}
+
+// Configuração de Cores por Matéria
+const subjectColors = {
+    "Matemática": "#ef4444", "Biologia": "#22c55e", "Física": "#38bdf8", "Química": "#f59e0b",
+    "Redação": "#a855f7", "Linguagens": "#ec4899", "Humanas": "#8b5cf6", "História": "#f97316",
+    "Geografia": "#14b8a6", "Filosofia": "#6366f1", "Sociologia": "#4f46e5", 
+    "1º Dia (Ling/Humanas)": "#d946ef", "2º Dia (Mat/Natureza)": "#84cc16", "Questões": "#fbbf24", "Geral": "#fbbf24"
+};
+function getColor(materia) { return subjectColors[materia] || '#94a3b8'; }
+
+// Tópicos Acadêmicos (Incluindo MMC, MDC e Biologia conforme seu histórico)
+const defaultTopics = {
+    "Matemática": ["Matemática Básica", "MMC e MDC", "Estatística", "Geometria Plana", "Funções"],
+    "Biologia": ["Ecologia", "Citologia", "Transporte Passivo", "Fisiologia Humana", "Evolução"],
+    "Física": ["Mecânica", "Eletrodinâmica", "Termologia", "Óptica"],
+    "Química": ["Atomística", "Química Orgânica", "Estequiometria", "Eletroquímica"],
+    "História": ["História do Brasil", "Era Vargas", "Idade Contemporânea"],
+    "Geografia": ["Geopolítica", "Meio Ambiente", "Geografia Urbana"],
+    "Linguagens": ["Interpretação de Texto", "Figuras de Linguagem", "Literatura"]
+};
+
+// ==========================================
+// SISTEMA DE CALENDÁRIO E TAREFAS
+// ==========================================
+function updateCountdown() {
+    const targetDate = new Date(`2026-11-01T00:00:00`).getTime();
+    const now = new Date().getTime();
+    const diff = targetDate - now;
+    let days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    document.getElementById('countdown-days').innerText = (days < 0 ? 0 : days) + " dias";
+}
+
+auth.onAuthStateChanged(user => {
+    if (user) {
+        document.getElementById('login-screen').style.display = 'none'; 
+        document.getElementById('app').style.display = 'flex';
+        document.getElementById('user-name').innerText = user.displayName ? user.displayName.split(' ')[0] : 'Estudante';
+        loadTasks();
+        updateCountdown();
+    } else { 
+        document.getElementById('login-screen').style.display = 'flex'; 
+        document.getElementById('app').style.display = 'none'; 
+    }
+});
+
+function loadTasks() {
+    db.collection("tasks").where("userId", "==", auth.currentUser.uid).onSnapshot(snap => {
+        currentTasks = snap.docs.map(doc => ({id: doc.id, ...doc.data()}));
+        renderCalendar(); 
+        renderTaskList(); 
+        renderConquistas();
+        initCharts();
+    });
+}
+
+function renderCalendar() {
+    const month = parseInt(document.getElementById('cal-month').value || new Date().getMonth());
+    const year = parseInt(document.getElementById('cal-year').value || new Date().getFullYear());
+    const body = document.getElementById('calendar-body');
+    body.innerHTML = '<div class="day-label">Dom</div><div class="day-label">Seg</div><div class="day-label">Ter</div><div class="day-label">Qua</div><div class="day-label">Qui</div><div class="day-label">Sex</div><div class="day-label">Sáb</div>';
     
-    <!-- Fontes e Scripts Externos -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    
+    for(let i = 0; i < firstDay; i++) body.innerHTML += '<div></div>';
+    
+    for(let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const dayDiv = document.createElement('div');
+        dayDiv.className = `day-box ${new Date().toISOString().split('T')[0] === dateStr ? 'today' : ''}`;
+        dayDiv.onclick = () => { 
+            selectedDate = dateStr; 
+            renderDailyTasks(dateStr); 
+            document.getElementById('modal-daily').style.display = 'flex'; 
+        };
+        dayDiv.innerHTML = `<span class="day-num">${d}</span>`;
+        currentTasks.filter(t => t.date === dateStr).slice(0, 3).forEach(t => {
+            dayDiv.innerHTML += `<div class="tag ${t.type}" style="background:${getColor(t.materia)}">${t.materia}</div>`;
+        });
+        body.appendChild(dayDiv);
+    }
+}
 
-    <!-- Link para o seu arquivo CSS separado -->
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
+// ==========================================
+// QUESTIONÁRIO IA - 15 PERGUNTAS (MENTE BLINDADA)
+// ==========================================
+const iaQuestions = [
+    { q: "Qual sua média geral atual?", o: ["Abaixo de 600", "Entre 600 e 700", "Entre 700 e 750", "Acima de 750"] },
+    { q: "Como está sua base em Matemática Básica?", o: ["Ruim (Travo em frações)", "Regular (Lembro o básico)", "Boa (Domino a base)", "Excelente (Cálculo rápido)"] },
+    { q: "Qual sua maior dificuldade em Natureza?", o: ["Interpretação", "Fórmulas", "Contas Rápidas", "Teoria Aplicada"] },
+    { q: "Como está seu desempenho na Redação?", o: ["Menos de 600", "Entre 600 e 720", "800+", "900+ fácil"] },
+    { q: "Qual área você mais negligencia?", o: ["Linguagens", "Humanas", "Natureza", "Matemática"] },
+    { q: "Horas livres para estudar por dia?", o: ["1 a 2 horas", "3 a 4 horas", "5 a 6 horas", "7+ horas"] },
+    { q: "Qual seu nível de foco atual?", o: ["Me distraio muito", "Celular atrapalha", "Foco por até 2h", "Mente Blindada Ativo"] },
+    { q: "Frequência de revisão?", o: ["Nunca reviso", "Só pré-simulado", "Semanalmente", "Anki/Flashcards"] },
+    { q: "Como prefere aprender?", o: ["Videoaula", "50% Vídeo / 50% Exercício", "20% Teoria / 80% Prática", "Só Questões"] },
+    { q: "Melhor turno de produtividade?", o: ["Manhã", "Tarde", "Noite", "Madrugada"] },
+    { q: "Tempo de prova nos simulados?", o: ["Falta tempo sempre", "Termino no limite", "Termino com calma", "Sobra muito tempo"] },
+    { q: "Conhecimento sobre TRI?", o: ["Não sei o que é", "Sei mas não aplico", "Priorizo as fáceis", "Estratégia completa"] },
+    { q: "Objetivo principal?", o: ["Começar do zero", "Vencer o edital", "Refinar a nota", "Alta concorrência (UFMG)"] },
+    { q: "Simulados por mês?", o: ["Nenhum", "1 por mês", "2 por mês", "4 por mês"] },
+    { q: "Maior fraqueza emocional?", o: ["Procrastinação", "Ansiedade", "Cansaço", "Perfeccionismo"] }
+];
 
-<div id="login-screen">
-    <h1 style="font-size: 3rem; margin-bottom: 15px; text-shadow: 0 4px 20px rgba(56, 189, 248, 0.4);">Projeto <span style="color:var(--primary)">800+</span></h1>
-    <p style="color: var(--dim); max-width: 450px; margin-bottom: 30px;">"A disciplina e os dados mostram o caminho. Sua aprovação te espera."</p>
-    <button class="btn-google" onclick="loginGoogle()">
-        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="22">
-        Acessar Plataforma
-    </button>
-</div>
+let currentIAQuestion = 0; let userIAResponses = [];
 
-<div id="app">
-    <nav class="sidebar">
-        <div class="sidebar-header">
-            <button class="trophy-btn" onclick="showPage('conquistas', this)" title="Página de Conquistas">🏆</button>
-            <div class="header-icons">
-                <button class="icon-btn" onclick="openNotifications()" title="Notificações">🔔<span id="notif-badge" class="notif-badge"></span></button>
-                <button class="icon-btn" onclick="openSettings()" title="Personalizar Perfil">⚙️</button>
+function startIAQuestionnaire() {
+    currentIAQuestion = 0; userIAResponses = [];
+    document.getElementById('modal-ia-questions').style.display = 'flex';
+    document.getElementById('question-container').style.display = 'block';
+    document.getElementById('ia-loading').style.display = 'none';
+    showIAQuestion();
+}
+
+function showIAQuestion() {
+    const q = iaQuestions[currentIAQuestion];
+    document.getElementById('ia-q-title').innerText = `Pergunta ${currentIAQuestion + 1} de 15`;
+    document.getElementById('ia-q-text').innerText = q.q;
+    const optionsDiv = document.getElementById('ia-options'); optionsDiv.innerHTML = '';
+    q.o.forEach(opt => {
+        const btn = document.createElement('button'); btn.className = 'btn-action';
+        btn.innerText = opt;
+        btn.onclick = () => { 
+            userIAResponses.push(opt); 
+            currentIAQuestion++; 
+            if(currentIAQuestion < 15) showIAQuestion(); else generateCronogramaIA(); 
+        };
+        optionsDiv.appendChild(btn);
+    });
+}
+
+// GERAÇÃO DE CRONOGRAMA VIA GEMINI API
+async function generateCronogramaIA() {
+    if (!GEMINI_API_KEY || GEMINI_API_KEY.includes("AIzaSyDAozYq")) { 
+        closeModal('modal-ia-questions'); 
+        setApiKey(); 
+        return; 
+    }
+    document.getElementById('question-container').style.display = 'none';
+    document.getElementById('ia-loading').style.display = 'block';
+
+    const promptText = `Aja como um mentor especializado no ENEM. O usuário é Rafael, busca 800+ na UFMG usando o método Mente Blindada. Respostas do perfil: ${userIAResponses.join(", ")}. Tarefa: Gere um JSON array de 7 objetos para os próximos 7 dias úteis. Retorne APENAS o JSON no formato: [{"date": "YYYY-MM-DD", "type": "aula|questoes", "materia": "Nome", "content": "Tópico", "startTime": "HH:MM", "endTime": "HH:MM"}]`;
+
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
+        });
+        const data = await response.json();
+        const rawResponse = data.candidates[0].content.parts[0].text;
+        const tasks = JSON.parse(rawResponse.replace(/
+```json|```/g, ""));
+
+        const batch = db.batch();
+        tasks.forEach(t => {
+            const docRef = db.collection("tasks").doc();
+            batch.set(docRef, { ...t, userId: auth.currentUser.uid, status: 'pending', reviewed: false });
+        });
+        await batch.commit();
+        closeModal('modal-ia-questions');
+        showAlert("Cronograma Mente Blindada gerado com sucesso!");
+    } catch (e) {
+        console.error(e);
+        showAlert("Erro na IA. Verifique se colou apenas o TEXTO da chave na aba de configuração.");
+        closeModal('modal-ia-questions');
+    }
+}
+
+// ==========================================
+// SISTEMA DE GAMIFICAÇÃO (MISSÕES E MEDALHAS)
+// ==========================================
+function renderConquistas() {
+    const doneTasks = currentTasks.filter(t => t.status === 'done');
+    const totalQ = doneTasks.reduce((acc, t) => acc + ((t.hits || 0) + (t.errors || 0)), 0);
+    document.getElementById('stats-total-q').innerText = totalQ;
+
+    const missionDefs = [
+        { t:'diaria', title:'Aquecimento', desc:'Faça 5 questões hoje', req: 5 },
+        { t:'diaria', title:'Mente Blindada', desc:'Estude 300 min hoje', req: 300 },
+        { t:'semanal', title:'Constância', desc:'Faça 100 questões na semana', req: 100 },
+        { t:'mensal', title:'Lenda do ENEM', desc:'Faça 1000 questões no mês', req: 1000 },
+        { t:'vitalicia', title:'Veterano UFMG', desc:'Resolver 5000 questões totais', req: 5000 }
+    ];
+
+    const missContainer = document.getElementById('missions-container');
+    missContainer.innerHTML = missionDefs.map(m => {
+        const progress = Math.min((totalQ / m.req) * 100, 100);
+        return `
+            <div class="mission-item">
+                <span class="mission-type ${m.t}">${m.t}</span>
+                <div style="font-weight:bold;">${m.title}</div>
+                <div style="font-size:0.8rem; color:var(--dim);">${m.desc}</div>
+                <div class="mission-progress-bg"><div class="mission-progress-fill" style="width:${progress}%"></div></div>
             </div>
-            <img id="user-pic" src="https://via.placeholder.com/70?text=..." style="width:70px; height:70px; object-fit:cover; border-radius:50%; border:3px solid var(--primary); padding: 3px; display: block; margin: 0 auto; box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);">
-            <h3 id="user-name" style="margin-top:10px; font-size: 1.2rem;">Estudante</h3>
-        </div>
-        <button class="nav-link active" onclick="showPage('inicio', this)">🏠 Início</button>
-        <button class="nav-link" onclick="showPage('calendario', this)">📅 Calendário</button>
-        <button class="nav-link" onclick="showPage('tarefas', this)">📝 Tarefas</button>
-        <button class="nav-link" onclick="showPage('redacao', this)">✍️ Redações</button>
-        <button class="nav-link" onclick="showPage('foco', this)">⏱️ Modo Foco</button>
-        <button class="nav-link" onclick="showPage('desempenho', this)">📊 Desempenho</button>
-    </nav>
+        `;
+    }).join('');
+}
 
-    <main class="main">
-        <!-- Botão para disparar a IA (Coloque na seção Início) -->
-<div style="margin-top: 30px; text-align: center;">
-    <button class="btn-action" style="width: auto; background: var(--purple); color: white; padding: 15px 30px;" onclick="startIAQuestionnaire()">
-        ✨ Gerar Cronograma Inteligente com IA
-    </button>
-</div>
+// ==========================================
+// TEMPORIZADORES E GRÁFICOS
+// ==========================================
+let timerObj = { pomo: { int: null, time: 0 }, stop: { int: null, time: 0, start: null } };
 
-<!-- Modal do Questionário IA -->
-<div id="modal-ia-questions" class="modal">
-    <div class="modal-content" style="max-width: 600px;">
-        <div id="question-container">
-            <h3 id="ia-q-title" style="color: var(--primary); margin-bottom: 20px;">Pergunta 1 de 15</h3>
-            <p id="ia-q-text" style="font-size: 1.1rem; margin-bottom: 20px; font-weight: 600;"></p>
-            <div id="ia-options" style="display: grid; gap: 10px;"></div>
-        </div>
-        <div id="ia-loading" style="display: none; text-align: center; padding: 40px 0;">
-            <div style="font-size: 3rem; animation: pulseTimer 1s infinite;">🧠</div>
-            <h3 style="margin-top: 20px;">Analisando seu perfil...</h3>
-            <p style="color: var(--dim);">A IA está distribuindo as matérias da sua lista no calendário.</p>
-        </div>
-    </div>
-</div>
-        <section id="inicio" class="page active">
-            <div style="padding: 20px 0; text-align: center;">
-                <h1 style="font-size: 2.8rem; color: var(--primary); text-shadow: 0 4px 15px rgba(56,189,248,0.2);">Bora estudar!</h1>
-                <div style="margin-top: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 25px;">
-                    <div class="chart-card" style="border-bottom: 4px solid var(--primary);">
-                        <h3 style="color: var(--primary)">Meta</h3>
-                        <p id="edit-meta" class="editable" contenteditable="true" onblur="saveEdits()" style="font-size: 1.5rem; font-weight: bold;">800+ Média Geral</p>
-                    </div>
-                    <div class="chart-card" style="border-bottom: 4px solid var(--success);">
-                        <h3 style="color: var(--success)">Ano Foco</h3>
-                        <p id="edit-ano" class="editable" contenteditable="true" onblur="saveEdits()" style="font-size: 1.5rem; font-weight: bold;">ENEM 2026</p>
-                    </div>
-                    <div class="chart-card" style="border-bottom: 4px solid var(--accent);">
-                        <h3 style="color: var(--accent)">Status (Faltam)</h3>
-                        <p id="countdown-days" style="font-size: 1.5rem; font-weight: bold;">188 dias</p>
-                    </div>
-                </div>
-            </div>
-        </section>
+function startPomodoro() {
+    let mins = document.getElementById('pomo-focus-time').value;
+    timerObj.pomo.time = mins * 60;
+    clearInterval(timerObj.pomo.int);
+    document.getElementById('pomo-card').classList.add('timer-active');
+    timerObj.pomo.int = setInterval(() => {
+        timerObj.pomo.time--;
+        document.getElementById('pomo-display').innerText = formatTime(timerObj.pomo.time);
+        if(timerObj.pomo.time <= 0) { clearInterval(timerObj.pomo.int); showAlert("Fim do bloco de foco!"); }
+    }, 1000);
+}
 
-        <section id="conquistas" class="page">
-            <h2 style="margin-bottom: 10px;">🏆 Suas Conquistas e Missões</h2>
-            <p style="color:var(--dim); margin-bottom:30px;">Cumpra as missões diárias, semanais e mensais para garantir os 800+!</p>
-            
-            <h3 style="margin-bottom: 15px;">📊 Níveis de Questões Resolvidas <span style="font-size:0.8rem; color:var(--dim); font-weight:normal;">(Clique para ver o histórico)</span></h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin-bottom: 40px;">
-                <div class="chart-card" style="text-align:center;">
-                    <div style="font-size:0.85rem; color:var(--dim); text-transform:uppercase; font-weight:bold;">Total Geral</div>
-                    <div style="font-size:3rem; font-weight:800; color:var(--primary);" id="stats-total-q">0</div>
-                </div>
-                <div class="chart-card clickable" style="text-align:center; cursor: pointer;" onclick="openDifficultyDetails('facil')">
-                    <div style="font-size:0.85rem; color:var(--success); text-transform:uppercase; font-weight:bold;">Nível Fácil</div>
-                    <div style="font-size:3rem; font-weight:800; color:var(--text);" id="stats-facil-q">0</div>
-                    <div style="font-size:0.75rem; color:var(--dim); margin-top:5px; text-decoration: underline;">Ver Questões ➔</div>
-                </div>
-                <div class="chart-card clickable" style="text-align:center; cursor: pointer;" onclick="openDifficultyDetails('medio')">
-                    <div style="font-size:0.85rem; color:var(--accent); text-transform:uppercase; font-weight:bold;">Nível Médio</div>
-                    <div style="font-size:3rem; font-weight:800; color:var(--text);" id="stats-medio-q">0</div>
-                    <div style="font-size:0.75rem; color:var(--dim); margin-top:5px; text-decoration: underline;">Ver Questões ➔</div>
-                </div>
-                <div class="chart-card clickable" style="text-align:center; cursor: pointer;" onclick="openDifficultyDetails('dificil')">
-                    <div style="font-size:0.85rem; color:var(--danger); text-transform:uppercase; font-weight:bold;">Nível Difícil</div>
-                    <div style="font-size:3rem; font-weight:800; color:var(--text);" id="stats-dificil-q">0</div>
-                    <div style="font-size:0.75rem; color:var(--dim); margin-top:5px; text-decoration: underline;">Ver Questões ➔</div>
-                </div>
-            </div>
+function initCharts() {
+    const ctx = document.getElementById('accDonutChart')?.getContext('2d');
+    if(!ctx) return;
+    const hits = currentTasks.reduce((a, t) => a + (t.hits || 0), 0);
+    const errors = currentTasks.reduce((a, t) => a + (t.errors || 0), 0);
+    new Chart(ctx, {
+        type: 'doughnut',
+        data: { labels: ['Acertos', 'Erros'], datasets: [{ data: [hits, errors], backgroundColor: ['#22c55e', '#ef4444'] }] },
+        options: { plugins: { legend: { display: false } }, cutout: '80%' }
+    });
+}
 
-            <h3 style="margin-bottom: 20px;">🏅 Grandes Medalhas (Vitalícias)</h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 40px;" id="medal-container">
-                </div>
+function setApiKey() {
+    const key = prompt("⚠️ COLE AQUI O TEXTO DA CHAVE (AI Studio):");
+    if (key) {
+        if (key.includes("AIzaSyDAozYq")) { showAlert("Erro! Você colou a chave do Firebase. Use a do Gemini AI Studio."); return; }
+        localStorage.setItem('gemini_api_key', key);
+        GEMINI_API_KEY = key;
+        showAlert("Chave salva com sucesso!");
+    }
+}
 
-            <h3 style="margin-bottom: 20px; border-top: 1px solid var(--border); padding-top: 20px;">🎯 Missões de Rotina (Mais de 50 Opções)</h3>
-            <div id="missions-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; max-height: 500px; overflow-y: auto; padding-right: 10px;">
-                </div>
-        </section>
-
-        <section id="calendario" class="page">
-            <h2 style="margin-bottom: 20px;">Organize seus Meses</h2>
-            <div class="cal-header">
-                <div style="display:flex; gap:15px; align-items:center;">
-                    <select id="cal-month" onchange="renderCalendar()"></select>
-                    <select id="cal-year" onchange="renderCalendar()"></select>
-                </div>
-            </div>
-            <div class="calendar-wrapper"><div class="calendar-grid" id="calendar-body"></div></div>
-        </section>
-
-        <section id="tarefas" class="page">
-            <h2 style="margin-bottom: 25px;">Lista de Tarefas</h2>
-            <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap: wrap;">
-                <span class="badge-type aula filter-btn" id="filter-aula" style="background: var(--primary); cursor: pointer; transition: 0.3s;" onclick="toggleTaskFilter('aula')">Aulas</span>
-                <span class="badge-type questoes filter-btn" id="filter-questoes" style="background: var(--accent); cursor: pointer; transition: 0.3s;" onclick="toggleTaskFilter('questoes')">Questões</span>
-                <span class="badge-type simulado filter-btn" id="filter-simulado" style="background: var(--danger); cursor: pointer; transition: 0.3s;" onclick="toggleTaskFilter('simulado')">Simulados</span>
-            </div>
-            
-            <h3 style="color:var(--text); margin-bottom:15px; font-size:1.1rem; border-bottom:1px solid var(--border); padding-bottom:5px;">A Fazer (Pendentes)</h3>
-            <div id="tasks-pending-list"></div>
-
-            <div style="display:flex; justify-content: space-between; margin-top: 30px; padding-top: 20px; border-top: 2px dashed var(--border);">
-                <button class="btn-action" style="width:48%; background:transparent; border:1px solid var(--danger); color:var(--danger); margin:0;" onclick="toggleList('incomplete')">⚠️ Ver Incompletas</button>
-                <button class="btn-action" style="width:48%; background:transparent; border:1px solid var(--success); color:var(--success); margin:0;" onclick="toggleList('done')">✅ Ver Concluídas</button>
-            </div>
-
-            <div id="tasks-incomplete-container" style="display:none; margin-top:20px;">
-                <h3 style="color:var(--danger); margin-bottom:15px; font-size:1rem;">Tarefas Atrasadas / Incompletas</h3>
-                <div id="tasks-incomplete-list"></div>
-            </div>
-            <div id="tasks-done-container" style="display:none; margin-top:20px;">
-                <h3 style="color:var(--success); margin-bottom:15px; font-size:1rem;">Tarefas Concluídas</h3>
-                <div id="tasks-done-list"></div>
-            </div>
-        </section>
-
-        <section id="redacao" class="page">
-            <h2 style="margin-bottom: 25px;">Histórico de Redações</h2>
-            <div class="redacao-grid">
-                <div class="chart-card" style="height: 300px;">
-                    <h3 style="margin-bottom: 15px; text-align: center; font-size: 1rem;">Evolução das Notas</h3>
-                    <canvas id="redacaoChart"></canvas>
-                </div>
-                <div class="chart-card" style="height: 300px;">
-                    <h3 style="margin-bottom: 15px; text-align: center; font-size: 1rem;">Redações feitas por Mês</h3>
-                    <canvas id="redacaoMonthChart"></canvas>
-                </div>
-            </div>
-            <div id="redacao-list"></div>
-        </section>
-
-        <section id="foco" class="page">
-            <h2 style="margin-bottom: 25px;">Modo Foco</h2>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px;">
-                <div id="pomo-card" style="background: var(--card); padding: 40px 20px; border-radius: 20px; text-align: center; border-top: 4px solid var(--primary); transition: 0.3s; border: 1px solid var(--border);">
-                    <h3 style="color: var(--primary);">Pomodoro Flex</h3>
-                    <div style="display:flex; justify-content:center; gap:10px; margin-top:10px;">
-                        <select id="pomo-focus-time" style="width:120px;">
-                            <option value="40">Foco: 40m</option>
-                            <option value="50" selected>Foco: 50m</option>
-                            <option value="60">Foco: 60m</option>
-                            <option value="90">Foco: 90m</option>
-                            <option value="120">Foco: 120m</option>
-                            <option value="180">Foco: 180m</option>
-                            <option value="240">Foco: 240m</option>
-                            <option value="300">Foco: 300m</option>
-                        </select>
-                        <select id="pomo-break-time" style="width:120px;">
-                            <option value="10">Pausa: 10m</option>
-                            <option value="15" selected>Pausa: 15m</option>
-                            <option value="20">Pausa: 20m</option>
-                        </select>
-                    </div>
-                    <div style="font-size: 5rem; font-weight: 800; margin: 20px 0; font-variant-numeric: tabular-nums; text-shadow: 0 4px 10px rgba(0,0,0,0.3);" id="pomo-display">50:00</div>
-                    <div style="display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-                        <button class="btn-action" style="width:auto; background:var(--success); color:#000;" onclick="startPomodoro()">Iniciar Foco</button>
-                        <button class="btn-action" style="width:auto; background:var(--accent); color:#000;" onclick="startPomoBreak()">Iniciar Pausa</button>
-                        <button class="btn-action" style="width:auto; background:var(--primary); color:#000;" onclick="pauseTimer('pomo')">Pausar</button>
-                    </div>
-                </div>
-                
-                <div id="stop-card" style="background: var(--card); padding: 40px 20px; border-radius: 20px; text-align: center; border-top: 4px solid var(--accent); transition: 0.3s; border: 1px solid var(--border);">
-                    <h3 style="color: var(--accent);">Cronômetro Flexível</h3>
-                    <select id="stopwatch-input" style="width:150px; margin: 10px auto;">
-                        <option value="60">1 Hora</option><option value="120">2 Horas</option>
-                        <option value="330" selected>5h 30m (ENEM)</option>
-                    </select>
-                    <div style="font-size: 5rem; font-weight: 800; margin: 20px 0; font-variant-numeric: tabular-nums; text-shadow: 0 4px 10px rgba(0,0,0,0.3);" id="stop-display">00:00</div>
-                    <div style="display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
-                        <button class="btn-action" style="width:auto; background:var(--success); color:#000;" onclick="startStopwatch()">Iniciar</button>
-                        <button class="btn-action" style="width:auto; background:var(--primary); color:#000;" onclick="pauseStopwatch()">Pausar</button>
-                        <button class="btn-action" style="width:auto; background:transparent; border:1px solid var(--danger); color:var(--danger);" onclick="resetStopwatch()">Reset</button>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section id="desempenho" class="page">
-            <h2 style="margin-bottom: 20px;">Desempenho Geral</h2>
-            <div class="filter-bar">
-                <label style="font-weight:bold;">Período:</label>
-                <select id="dash-filter-type" onchange="toggleDashDates()" style="width:auto; margin:0;">
-                    <option value="all">Todo o Período</option>
-                    <option value="week">Esta Semana</option>
-                    <option value="month">Este Mês</option>
-                    <option value="custom">Personalizado</option>
-                </select>
-                <div id="custom-dates" style="display:none; align-items:center; gap:10px;">
-                    <input type="date" id="dash-start" style="width:auto; margin:0; padding:8px;">
-                    <span style="color:var(--dim)">até</span>
-                    <input type="date" id="dash-end" style="width:auto; margin:0; padding:8px;">
-                </div>
-                <button class="btn-action" style="width:auto; margin:0; padding:10px 20px; background:var(--primary); color:#000;" onclick="initCharts()">Filtrar Dados</button>
-            </div>
-
-            <div class="chart-card" style="margin-bottom: 20px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px; flex-wrap: wrap; gap:10px;">
-                    <div>
-                        <h3 style="color: var(--danger); margin-bottom: 5px;">⚠️ Revisão de Erros</h3>
-                        <p style="font-size: 0.85rem; color: var(--dim);">Zere seus erros para garantir os 800+!</p>
-                    </div>
-                    <button class="btn-action" style="width:auto; margin:0; background:var(--card); border:1px solid var(--accent); color:var(--accent);" onclick="openImprovementModal()">📊 Ver Pontos a Melhorar</button>
-                </div>
-                <div id="review-list" style="max-height: 250px; overflow-y: auto; padding-right: 5px;"></div>
-            </div>
-
-            <div class="perf-dashboard">
-                <div class="chart-card" style="display: flex; justify-content: center; align-items: center; position: relative;">
-                    <canvas id="accDonutChart" style="max-height: 250px;"></canvas>
-                    <div id="center-donut-text" style="position: absolute; text-align: center; font-weight: 600;">0<br><span style="font-size:0.8rem; font-weight:normal;">questões</span></div>
-                </div>
-                <div class="stats-grid-small">
-                    <div class="stat-mini-card"><div id="stat-accuracy" class="stat-val" style="color: var(--primary);">0%</div><div class="stat-label">Taxa de acerto</div></div>
-                    <div class="stat-mini-card"><div id="stat-total-q-dash" class="stat-val" style="color: var(--text);">0</div><div class="stat-label">Questões no período</div></div>
-                    <div class="stat-mini-card" style="background: var(--success); color: #000; border: none;"><div id="stat-hits" class="stat-val" style="color:#000;">0</div><div class="stat-label" style="color:#000;">Certas</div></div>
-                    <div class="stat-mini-card" style="background: var(--danger); color: #fff; border: none;"><div id="stat-errors" class="stat-val" style="color:#fff;">0</div><div class="stat-label" style="color:#fff;">Erradas</div></div>
-                    <div class="stat-mini-card"><div id="stat-avg-time" class="stat-val" style="color: var(--text);">0s</div><div class="stat-label">Tempo médio / questão</div></div>
-                    <div class="stat-mini-card"><div class="stat-val" style="color: var(--accent);">--</div><div class="stat-label">Ranking Mensal</div></div>
-                </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px;">
-                <div class="chart-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
-                        <h3 style="margin:0; font-size:1.1rem;">Tempo de Estudo</h3>
-                        <select id="time-chart-type" onchange="toggleChart('time')" style="width:auto; padding:6px; margin:0; font-size:0.8rem; background:var(--bg); border:1px solid var(--border); border-radius:6px;">
-                            <option value="pie">Gráfico de Pizza</option><option value="bar">Barras (Tabela)</option>
-                        </select>
-                    </div>
-                    <div id="time-pie-container"><canvas id="timePieChart" style="max-height: 250px;"></canvas></div>
-                    <div id="time-bar-container" style="display:none; height: 250px;"><canvas id="timeBarChart"></canvas></div>
-                </div>
-
-                <div class="chart-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
-                        <h3 style="margin:0; font-size:1.1rem;">Questões por Matéria</h3>
-                        <select id="qnt-chart-type" onchange="toggleChart('qnt')" style="width:auto; padding:6px; margin:0; font-size:0.8rem; background:var(--bg); border:1px solid var(--border); border-radius:6px;">
-                            <option value="pie">Gráfico de Pizza</option><option value="bar">Barras (Tabela)</option>
-                        </select>
-                    </div>
-                    <div id="qnt-pie-container"><canvas id="qntPieChart" style="max-height: 250px;"></canvas></div>
-                    <div id="qnt-bar-container" style="display:none; height: 250px;"><canvas id="qntBarChart"></canvas></div>
-                </div>
-            </div>
-            
-            <div class="chart-card">
-                <h3 style="margin-bottom: 15px;">Questões Respondidas por Dia</h3>
-                <canvas id="dailyBarChart" style="max-height: 300px;"></canvas>
-            </div>
-        </section>
-
-        <footer style="margin-top: 50px; text-align: center; color: var(--dim); font-size: 0.85rem;">Criado pelo <strong>Grupo Conexão</strong></footer>
-    </main>
-</div>
-
-<!-- MANTIVE TODOS OS MODAIS E ELEMENTOS HTML AQUI -->
-<div id="modal-diff-details" class="modal"><div class="modal-content"><h3 id="diff-modal-title" style="margin-bottom: 15px;">Questões</h3><p style="font-size: 0.85rem; color: var(--dim); margin-bottom: 15px;">Aqui estão as matérias e conteúdos que você avaliou com esse nível.</p><div id="diff-modal-list" style="max-height: 60vh; overflow-y: auto; padding-right: 5px;"></div><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-diff-details')">Fechar Janela</button></div></div>
-<div id="modal-improvement" class="modal"><div class="modal-content"><h3 style="color: var(--accent); margin-bottom: 15px;">📊 Pontos a Melhorar</h3><p style="font-size: 0.9rem; color: var(--dim); margin-bottom: 20px;">Balanço das suas avaliações e matérias que precisam de mais atenção.</p><div style="display:flex; justify-content:space-between; background:var(--bg); padding:15px; border-radius:10px; margin-bottom:20px; border:1px solid var(--border);"><div style="text-align:center;"><div style="font-size:1.5rem; color:var(--success); font-weight:bold;" id="imp-reviewed-count">0</div><div style="font-size:0.8rem; color:var(--dim);">Erros Avaliados</div></div><div style="text-align:center;"><div style="font-size:1.5rem; color:var(--danger); font-weight:bold;" id="imp-pending-count">0</div><div style="font-size:0.8rem; color:var(--dim);">Pendentes</div></div></div><h4 style="color:var(--text); margin-bottom:10px; font-size:1rem;">⚠️ Atenção nessas Matérias (< 70%)</h4><div id="improve-list" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom:20px;"></div><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-improvement')">Fechar Relatório</button></div></div>
-<div id="modal-photo-view" class="modal"><div class="modal-content" style="text-align:center;"><h3 style="color: var(--purple); margin-bottom: 15px;">📷 Sua Redação</h3><img id="view-photo-img" src="" style="max-width:100%; max-height:60vh; border-radius:10px; border:2px solid var(--border); margin-bottom:15px; object-fit:contain;"><button class="btn-action" style="background: var(--primary); color: #000;" onclick="closeModal('modal-photo-view')">Fechar Imagem</button></div></div>
-<div id="modal-notif" class="modal"><div class="modal-content"><h3 style="color: var(--accent); margin-bottom: 15px;">🔔 Mensagem do Sistema</h3><p style="color: var(--text); line-height: 1.5; margin-bottom: 20px;">Opa, tudo bão? Passando pra lembrar que você tem <strong>erros pendentes de revisão</strong> lá na aba de Desempenho.</p><button class="btn-action" style="background: var(--primary); color: #000;" onclick="closeModal('modal-notif'); showPage('desempenho', document.querySelectorAll('.nav-link')[5])">Ir para Revisão</button><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-notif')">Fechar</button></div></div>
-<div id="modal-settings" class="modal"><div class="modal-content"><h3 style="color: var(--primary); margin-bottom: 15px;">Personalizar Perfil</h3><label style="font-size: 0.85rem; color: var(--dim);">Como quer ser chamado?</label><input type="text" id="set-name" placeholder="Seu Nome"><label style="font-size: 0.85rem; color: var(--dim);">Foto de Perfil (Link ou Galeria)</label><div style="display:flex; gap:10px; margin-bottom: 8px;"><input type="text" id="set-photo" placeholder="https://link-da-sua-foto.jpg" style="margin:0; flex:1;"><input type="file" id="set-photo-file" accept="image/*" style="display:none;" onchange="handleFileUpload(event)"><button class="btn-action" style="width:auto; margin:0; padding:10px 15px; background:var(--bg); border:1px solid var(--border); color:var(--text);" onclick="document.getElementById('set-photo-file').click()">📂</button></div><button class="btn-action" style="background: var(--success); color: #000;" onclick="saveSettings()">Salvar Configurações</button><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-settings')">Cancelar</button><hr style="border:0; border-top:1px solid var(--border); margin: 25px 0;"><button class="btn-action" style="background: #334155; color: var(--danger); margin-bottom: 15px;" onclick="logout()">🚪 Sair da Conta</button><h4 style="color: var(--danger); margin-bottom:10px;">Área de Perigo</h4><button class="btn-action" style="background: transparent; border: 1px solid var(--danger); color: var(--danger);" onclick="resetPlatform()">Zerar Plataforma (Apagar Tudo)</button></div></div>
-<div id="modal-success" class="modal"><div class="modal-content" style="text-align: center;"><h3 style="color: var(--success); margin-bottom: 15px; font-size: 1.8rem;">✅ Sucesso!</h3><p style="color: var(--text); line-height: 1.5; margin-bottom: 20px;">Seu agendamento foi salvo e está de acordo com as regras da plataforma. Bora pra cima desses 800+!</p><button class="btn-action" style="background: var(--primary); color: #000;" onclick="closeModal('modal-success')">Continuar</button></div></div>
-<div id="modal-alert" class="modal"><div class="modal-content" style="text-align: center;"><h3 style="color: var(--danger); margin-bottom: 15px; font-size: 1.5rem;">⚠️ Atenção</h3><p id="alert-message" style="color: var(--text); line-height: 1.5; margin-bottom: 20px;"></p><button class="btn-action" style="background: var(--card); border: 1px solid var(--danger); color: var(--danger);" onclick="closeModal('modal-alert')">Entendi</button></div></div>
-<datalist id="topic-suggestions"></datalist>
-<div id="modal-daily" class="modal"><div class="modal-content"><h3 id="daily-date-label" style="color: var(--primary); margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">Tarefas do Dia</h3><div id="daily-tasks-list" style="margin-bottom: 20px; max-height: 300px; overflow-y: auto;"></div><button class="btn-action" style="background: var(--success); color: #000;" onclick="openNewTaskModal()">+ Agendar Nova Tarefa</button><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-daily')">Fechar Visão do Dia</button></div></div>
-<div id="modal-task" class="modal"><div class="modal-content"><h3 id="modal-date-label" style="color: var(--primary); margin-bottom: 15px;">Agendar Estudo</h3><label style="font-size:0.85rem; color:var(--dim);">Tipo de Atividade</label><select id="task-type" onchange="toggleTaskFields()"><option value="aula">Teoria / Aula</option><option value="questoes">Treino de Questões</option><option value="simulado">Simulado</option><option value="redacao">Redação</option></select><div id="dynamic-fields"></div><div style="display:flex; gap:10px; margin-top:10px;"><div style="flex:1;"><label style="font-size:0.8rem; color:var(--dim);">Início</label><input type="time" id="task-start-time" value="08:00"></div><div style="flex:1;"><label style="font-size:0.8rem; color:var(--dim);">Fim</label><input type="time" id="task-end-time" value="09:00"></div></div><div id="repeat-container" style="display: flex; align-items: center; gap: 10px; margin: 15px 0;"><input type="checkbox" id="task-repeat" style="width: 20px;"><label for="task-repeat" style="font-size: 0.85rem;">Repetir por 3 semanas</label></div><button class="btn-action" style="background: var(--primary); color: #000;" onclick="handleSaveTask()">Salvar Tarefa</button><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-task')">Cancelar</button><div id="delete-task-container" style="display: none; margin-top: 15px;"><button class="btn-action" style="background: transparent; border: 1px solid var(--danger); color: var(--danger);" onclick="deleteTaskFromModal()">🗑️ Apagar Tarefa</button></div></div></div>
-<div id="modal-done" class="modal"><div class="modal-content"><h3 style="color: var(--success); margin-bottom: 15px;">Avaliar Conclusão</h3><p id="done-task-info" style="margin-bottom: 15px; font-size: 0.9rem; font-weight:bold;"></p><div id="done-dynamic-fields"></div><div id="difficulty-selection" style="display:none; margin-top:15px; background:var(--bg); padding:15px; border-radius:8px; border:1px solid var(--border);"><label style="font-size:0.85rem; color:var(--dim); margin-bottom:8px; display:block;">Qual foi o nível de dificuldade?</label><div style="display:flex; gap:10px;"><button id="btn-diff-facil" class="btn-action" style="margin:0; border:1px solid var(--success); color:var(--success); background:var(--bg);" onclick="setDifficulty('facil')">Fácil</button><button id="btn-diff-medio" class="btn-action" style="margin:0; border:1px solid var(--accent); color:var(--accent); background:var(--bg);" onclick="setDifficulty('medio')">Médio</button><button id="btn-diff-dificil" class="btn-action" style="margin:0; border:1px solid var(--danger); color:var(--danger); background:var(--bg);" onclick="setDifficulty('dificil')">Difícil</button></div><input type="hidden" id="task-difficulty-val"></div><button class="btn-action" style="background: var(--success); color: #000; margin-top: 20px;" onclick="confirmTaskCompletion()">Salvar Progresso</button><button class="btn-action" style="background: transparent; border: 1px solid var(--border); color: var(--text);" onclick="closeModal('modal-done')">Voltar</button></div></div>
-
-<!-- Link para o JavaScript separado -->
-<script src="script.js"></script>
-</body>
-</html>
+// Funções Auxiliares
+function formatTime(s) { return `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+function renderTaskList() { /* Implementação da renderização da lista */ }
+function renderDailyTasks(date) { /* Implementação da visão do dia */ }
+function restoreTimers() {} function renderReviewSection() {}
