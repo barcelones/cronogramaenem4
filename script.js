@@ -120,10 +120,13 @@ function handleFileUpload(event) { const file = event.target.files[0]; if (!file
 function handleRedacaoPhotoUpload(event) { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = function (e) { tempRedacaoPhoto = e.target.result; }; reader.readAsDataURL(file); }
 
 function openSettings() {
-    uploadedImageBase64 = ""; document.getElementById('set-name').value = auth.currentUser.displayName || '';
+    uploadedImageBase64 = ""; 
+    document.getElementById('set-name').value = (auth.currentUser ? auth.currentUser.displayName : "Visitante") || '';
     const localPhoto = localStorage.getItem('custom_profile_pic');
     if (localPhoto && localPhoto.startsWith('data:image')) { document.getElementById('set-photo').value = "Imagem carregada"; document.getElementById('set-photo').disabled = true; }
-    else { document.getElementById('set-photo').value = localPhoto || auth.currentUser.photoURL || ''; document.getElementById('set-photo').disabled = false; }
+    else { document.getElementById('set-photo').value = localPhoto || (auth.currentUser ? auth.currentUser.photoURL : '') || ''; document.getElementById('set-photo').disabled = false; }
+    
+    document.getElementById('set-gemini-key').value = localStorage.getItem('gemini_api_key') || "";
     
     document.getElementById('modal-settings').style.display = 'flex';
 }
@@ -131,14 +134,25 @@ function openSettings() {
 async function saveSettings() {
     const name = document.getElementById('set-name').value; 
     let photo = document.getElementById('set-photo').value;
+    const geminiKey = document.getElementById('set-gemini-key').value;
     try {
         if (uploadedImageBase64) localStorage.setItem('custom_profile_pic', uploadedImageBase64); else if (photo !== "Imagem carregada") localStorage.setItem('custom_profile_pic', photo);
         
-        await auth.currentUser.updateProfile({ displayName: name });
-        document.getElementById('user-name').innerText = name.split(' ')[0];
-        document.getElementById('user-pic').src = localStorage.getItem('custom_profile_pic') || auth.currentUser.photoURL || 'https://via.placeholder.com/70';
+        if (geminiKey) {
+            localStorage.setItem('gemini_api_key', geminiKey.trim());
+            GEMINI_API_KEY = geminiKey.trim();
+        } else {
+            localStorage.removeItem('gemini_api_key');
+            GEMINI_API_KEY = "";
+        }
+        
+        if (auth.currentUser) {
+            await auth.currentUser.updateProfile({ displayName: name });
+        }
+        document.getElementById('user-name').innerText = name.split(' ')[0] || "Visitante";
+        document.getElementById('user-pic').src = localStorage.getItem('custom_profile_pic') || (auth.currentUser ? auth.currentUser.photoURL : 'https://via.placeholder.com/70');
         closeModal('modal-settings');
-        showAlert("Perfil atualizado com sucesso!");
+        showAlert("Configurações atualizadas com sucesso!");
     } catch (e) { showAlert("Erro ao atualizar: " + e.message); }
 }
 
@@ -159,20 +173,31 @@ function checkNotifications() {
 }
 function openNotifications() { document.getElementById('notif-badge').style.display = 'none'; localStorage.setItem('has_unread_notif', 'false'); document.getElementById('modal-notif').style.display = 'flex'; }
 
+// Bypass de Login para acesso direto
+const guestUser = { uid: "usuario_local", displayName: "Rafael", photoURL: "https://via.placeholder.com/70" };
+
+function initializeApp(user) {
+    document.getElementById('login-screen').style.display = 'none'; 
+    document.getElementById('app').style.display = 'flex';
+    document.getElementById('user-name').innerText = user.displayName.split(' ')[0];
+    document.getElementById('user-pic').src = localStorage.getItem('custom_profile_pic') || user.photoURL;
+    loadEdits();
+    loadTasks();
+    restoreTimers();
+}
+
+// Força a entrada direta
+setTimeout(() => initializeApp(guestUser), 500);
+
 auth.onAuthStateChanged(user => {
-    if (user) {
-        document.getElementById('login-screen').style.display = 'none'; document.getElementById('app').style.display = 'flex';
-        document.getElementById('user-name').innerText = user.displayName ? user.displayName.split(' ')[0] : 'Estudante';
-        document.getElementById('user-pic').src = localStorage.getItem('custom_profile_pic') || user.photoURL || 'https://via.placeholder.com/70';
-        loadEdits();
-        loadTasks();
-        restoreTimers();
-    } else { document.getElementById('login-screen').style.display = 'flex'; document.getElementById('app').style.display = 'none'; }
+    if (user) initializeApp(user);
 });
 
 function showPage(id, btn) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active')); document.querySelectorAll('.nav-link').forEach(b => b.classList.remove('active'));
-    document.getElementById(id).classList.add('active'); if (btn && btn.classList.contains('nav-link')) btn.classList.add('active');
+    const page = document.getElementById(id);
+    if (page) page.classList.add('active');
+    if (btn && btn.classList.contains('nav-link')) btn.classList.add('active');
     if (id === 'desempenho' || id === 'redacao' || id === 'conquistas') { initCharts(); renderConquistas(); }
 }
 
@@ -255,7 +280,7 @@ async function handleSaveTask() {
     if ((type === 'aula' || type === 'questoes') && contentVal) saveCustomTopic(materia, contentVal);
 
     const taskData = {
-        userId: auth.currentUser.uid,
+        userId: auth.currentUser ? auth.currentUser.uid : "usuario_local",
         type,
         materia,
         status: 'pending',
@@ -307,7 +332,8 @@ function openEditModal(id) {
 }
 
 function loadTasks() {
-    db.collection("tasks").where("userId", "==", auth.currentUser.uid).onSnapshot(snap => {
+    const uid = auth.currentUser ? auth.currentUser.uid : "usuario_local";
+    db.collection("tasks").where("userId", "==", uid).onSnapshot(snap => {
         currentTasks = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         renderCalendar(); renderTaskList(); renderReviewSection(); checkNotifications(); renderConquistas();
         if (document.getElementById('desempenho').classList.contains('active')) initCharts();
@@ -519,7 +545,9 @@ function initCharts() {
     if (donutChart) donutChart.destroy();
     const hits = tasks.reduce((a, t) => a + (t.hits || 0), 0);
     const errs = tasks.reduce((a, t) => a + (t.errors || 0), 0);
-    donutChart = new Chart(document.getElementById('accDonutChart'), { type: 'doughnut', data: { labels: ['Acertos', 'Erros'], datasets: [{ data: [hits, errs], backgroundColor: ['#22c55e', '#ef4444'] }] } });
+    const canvas = document.getElementById('accDonutChart');
+    if (!canvas) return;
+    donutChart = new Chart(canvas, { type: 'doughnut', data: { labels: ['Acertos', 'Erros'], datasets: [{ data: [hits, errs], backgroundColor: ['#22c55e', '#ef4444'] }] } });
 }
 
 const iaQuestions = [
@@ -619,7 +647,7 @@ Estrutura do JSON:
 
     try {
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key=${GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -640,11 +668,12 @@ Estrutura do JSON:
         if (!Array.isArray(tasks) || tasks.length === 0) throw new Error("Resposta da IA inválida.");
 
         const batch = db.batch();
+        const uid = auth.currentUser ? auth.currentUser.uid : "usuario_local";
         tasks.forEach(t => {
             const ref = db.collection("tasks").doc();
             batch.set(ref, {
                 ...t,
-                userId: auth.currentUser.uid,
+                userId: uid,
                 status: 'pending',
                 qnt: t.qnt || 0,
                 reviewed: false
